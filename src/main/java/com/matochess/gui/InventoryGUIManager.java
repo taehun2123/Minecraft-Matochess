@@ -28,9 +28,6 @@ public class InventoryGUIManager {
     // 플레이어별 상점 유닛
     private final Map<UUID, List<Unit>> playerShops;
 
-    // 플레이어별 상점 열림/닫힘 상태
-    private final Map<UUID, Boolean> shopOpenState;
-
     // 관전 모드 플레이어 추적
     private final Map<UUID, UUID> spectatingPlayers; // 관전자 -> 관전대상
 
@@ -40,26 +37,61 @@ public class InventoryGUIManager {
     // 판매를 위해 선택된 유닛 추적
     private final Map<UUID, Unit> selectedUnitsForSale; // 플레이어 -> 판매할 유닛
 
-    // 슬롯 상수
-    private static final int HOTBAR_XP_SLOT = 0;     // 1번 칸
-    private static final int HOTBAR_REROLL_SLOT = 1; // 2번 칸
-    private static final int HOTBAR_SHOP_START = 2;  // 3번 칸 (인덱스 2)
-    private static final int HOTBAR_SHOP_END = 6;    // 7번 칸 (인덱스 6)
-    private static final int HOTBAR_SPECTATE = 8;    // 9번 칸
+    // 54칸 통합 GUI 슬롯 상수
+    // 1~8칸, 10~17칸, 19~26칸: 배치판 (8x3 = 24칸)
+    private static final int[] BOARD_SLOTS = {
+        0, 1, 2, 3, 4, 5, 6, 7,        // 1줄 (1~8칸)
+        9, 10, 11, 12, 13, 14, 15, 16, // 2줄 (10~17칸)
+        18, 19, 20, 21, 22, 23, 24, 25 // 3줄 (19~26칸)
+    };
+    private static final int INFO_HEALTH_SLOT = 8;     // 9칸: 체력 정보
+    private static final int INFO_SYNERGY_SLOT = 17;   // 18칸: 시너지 정보
+    private static final int INFO_RESOURCES_SLOT = 26; // 27칸: 재화 정보
 
-    private static final int INV_BENCH_START = 17;   // 벤치 시작 (1줄)
-    private static final int INV_BENCH_END = 26;     // 벤치 끝 (1줄, 9칸)
-    private static final int INV_SELL_START = 27;    // 판매 영역 시작 (2번째 줄)
-    private static final int INV_SELL_END = 36;      // 판매 영역 끝 (2번째 줄, 9칸)
+    // 28~35칸: 대기 병력 (벤치)
+    public static final int INV_BENCH_START = 27;
+    public static final int INV_BENCH_END = 34;
+
+    // 36칸: 레벨/경험치 정보
+    private static final int INFO_LEVEL_SLOT = 35;
+
+    // 37~45칸: 검정 유리판 (필러)
+    private static final int FILLER_START = 36;
+    private static final int FILLER_END = 44;
+
+    // 46칸: 경험치 업
+    private static final int BUTTON_XP_SLOT = 45;
+
+    // 47칸: 리롤
+    private static final int BUTTON_REROLL_SLOT = 46;
+
+    // 48~52칸: 상점 유닛
+    private static final int SHOP_START = 47;
+    private static final int SHOP_END = 51;
+
+    // 53칸: 비어있음
+    private static final int EMPTY_SLOT = 52;
+
+    // 54칸: 다른 플레이어 탐색
+    private static final int BUTTON_SPECTATE_SLOT = 53;
 
     public InventoryGUIManager(MatoChessPlugin plugin) {
         this.plugin = plugin;
         this.shopManager = new ShopManager(plugin);
         this.playerShops = new HashMap<>();
-        this.shopOpenState = new HashMap<>();
         this.spectatingPlayers = new HashMap<>();
         this.selectedUnits = new HashMap<>();
         this.selectedUnitsForSale = new HashMap<>();
+    }
+
+    /**
+     * 특정 플레이어가 현재 관전 중인 대상의 UUID를 반환합니다.
+     * @param spectatorId 관전자 UUID
+     * @return 관전 대상의 UUID. 관전 중이 아니면 null을 반환합니다.
+     */
+    public UUID getSpectatingTarget(UUID spectatorId) {
+        // spectatingPlayers는 InventoryGUIManager에서 관리하는 Map<UUID, UUID>입니다.
+        return spectatingPlayers.get(spectatorId);
     }
 
     /**
@@ -68,6 +100,35 @@ public class InventoryGUIManager {
     public void resetPlayerShop(UUID playerId) {
         playerShops.remove(playerId);
     }
+
+    /*
+     * == 배치용 유닛 추적 메서드 추가 ==
+     */
+
+    /**
+     * 배치를 위해 유닛 선택
+     */
+    public void selectUnitForPlacement(UUID playerId, Unit unit) {
+        selectedUnits.put(playerId, unit);
+    }
+
+    /**
+     * 배치를 위해 선택된 유닛 가져오기
+     */
+    public Unit getSelectedUnitForPlacement(UUID playerId) {
+        return selectedUnits.get(playerId);
+    }
+
+    /**
+     * 배치를 위해 선택된 유닛 해제
+     */
+    public void clearSelectedUnitForPlacement(UUID playerId) {
+        selectedUnits.remove(playerId);
+    }
+
+    /*
+     * == 판매용 유닛 추적 메서드 (이젠 Shift 우클릭으로 즉시 판매되어 선택 로직은 단순화됨) ==
+     */
 
     /**
      * 판매용 유닛 선택
@@ -91,73 +152,122 @@ public class InventoryGUIManager {
     }
 
     /**
-     * 플레이어에게 메인 게임 인벤토리 설정
+     * 플레이어에게 메인 게임 54칸 통합 GUI 열기
      */
     public void setupGameInventory(Player player, GamePlayer gamePlayer) {
-        player.getInventory().clear();
+        // 54칸 GUI 생성
+        Inventory gui = Bukkit.createInventory(null, 54, "§6§l마토체스 - " + player.getName());
 
-        // 핫바 설정
-        setupHotbar(player, gamePlayer, true);
+        // 배치판 설정 (1~8, 10~17, 19~26칸)
+        setupBoardSlots(gui, gamePlayer);
 
-        // 벤치 유닛 표시 (인벤토리 중간 줄)
-        setupBenchSlots(player, gamePlayer);
+        // 정보 패널 설정 (9, 18, 27칸)
+        setupInfoPanels(gui, gamePlayer);
 
-        // 판매 슬롯 표시 (인벤토리 하단 줄)
-        setupSellSlots(player);
+        // 벤치 설정 (28~35칸)
+        setupBenchSlots(gui, gamePlayer);
 
-        player.updateInventory();
+        // 레벨 정보 설정 (36칸)
+        setupLevelInfo(gui, gamePlayer);
+
+        // 필러 설정 (37~45칸)
+        setupFillers(gui);
+
+        // 버튼 설정 (46, 47, 54칸)
+        setupButtons(gui, gamePlayer);
+
+        // 상점 설정 (48~52칸)
+        setupShop(gui, gamePlayer, player);
+
+        // 빈 칸 (53칸)
+        gui.setItem(EMPTY_SLOT, null);
+
+        player.openInventory(gui);
     }
 
     /**
-     * 핫바 설정
+     * 배치판 슬롯 설정 (1~8, 10~17, 19~26칸)
      */
-    private void setupHotbar(Player player, GamePlayer gamePlayer, boolean shopOpen) {
-        Inventory inv = player.getInventory();
+    private void setupBoardSlots(Inventory gui, GamePlayer gamePlayer) {
+        Map<Position, Unit> board = gamePlayer.getBoard();
 
-        // 1칸: 경험치 업 버튼
-        ItemStack xpButton = createXPButton(gamePlayer);
-        inv.setItem(HOTBAR_XP_SLOT, xpButton);
+        for (int i = 0; i < BOARD_SLOTS.length; i++) {
+            int slot = BOARD_SLOTS[i];
 
-        // 2칸: 리롤 버튼
-        ItemStack rerollButton = createRerollButton(gamePlayer);
-        inv.setItem(HOTBAR_REROLL_SLOT, rerollButton);
+            // 슬롯을 8x3 그리드로 변환
+            int row = i / 8;  // 0, 1, 2
+            int col = i % 8;  // 0~7
 
-        // 3~7칸: 상점 유닛 또는 빈 칸
-        if (shopOpen) {
-            List<Unit> shopUnits = playerShops.computeIfAbsent(player.getUniqueId(),
-                k -> shopManager.generateShop(gamePlayer.getLevel()));
+            Position pos = new Position(col, row);
+            Unit unit = board.get(pos);
 
-            for (int i = 0; i < 5; i++) {
-                int slot = HOTBAR_SHOP_START + i;
-                if (i < shopUnits.size() && shopUnits.get(i) != null) {
-                    Unit unit = shopUnits.get(i);
-                    ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey());
+            if (unit != null) {
+                ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey());
 
-                    // 가격 정보 추가
-                    ItemMeta meta = unitItem.getItemMeta();
-                    List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
-                    lore.add("");
-                    lore.add("§6구매 비용: " + unit.getCost() + "G");
-                    lore.add("§e클릭하여 구매");
-                    meta.setLore(lore);
-                    unitItem.setItemMeta(meta);
+                ItemMeta meta = unitItem.getItemMeta();
+                List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
+                lore.add("");
+                lore.add("§7위치: §e(" + col + ", " + row + ")");
+                lore.add("§e클릭하여 벤치로 이동");
+                meta.setLore(lore);
+                unitItem.setItemMeta(meta);
 
-                    inv.setItem(slot, unitItem);
-                } else {
-                    inv.setItem(slot, null);
-                }
-            }
-        } else {
-            // 상점 닫힘 상태 - 빈 칸
-            for (int i = HOTBAR_SHOP_START; i <= HOTBAR_SHOP_END; i++) {
-                inv.setItem(i, null);
+                gui.setItem(slot, unitItem);
+            } else {
+                // 빈 배치판 칸
+                ItemStack emptySlot = new ItemStack(Material.LIGHT_GRAY_STAINED_GLASS_PANE);
+                ItemMeta meta = emptySlot.getItemMeta();
+                meta.setDisplayName("§7빈 배치판 칸 (" + col + ", " + row + ")");
+                List<String> lore = new ArrayList<>();
+                lore.add("§7벤치 유닛을 좌클릭한 후");
+                lore.add("§7이곳을 클릭하여 배치");
+                meta.setLore(lore);
+                emptySlot.setItemMeta(meta);
+                gui.setItem(slot, emptySlot);
             }
         }
+    }
 
+    /**
+     * 정보 패널 설정 (9, 18, 27칸)
+     */
+    private void setupInfoPanels(Inventory gui, GamePlayer gamePlayer) {
+        // 9칸: 체력 정보
+        ItemStack healthInfo = new ItemStack(Material.RED_STAINED_GLASS_PANE);
+        ItemMeta healthMeta = healthInfo.getItemMeta();
+        healthMeta.setDisplayName("§c§l체력 정보");
+        List<String> healthLore = new ArrayList<>();
+        healthLore.add("§7현재 체력: §c" + gamePlayer.getHealth() + " HP");
+        healthLore.add("§7승리 연속: §a" + gamePlayer.getWinStreak());
+        healthLore.add("§7승리 라운드: §a" + gamePlayer.getRoundsWon());
+        healthLore.add("§7패배 라운드: §c" + gamePlayer.getRoundsLost());
+        healthMeta.setLore(healthLore);
+        healthInfo.setItemMeta(healthMeta);
+        gui.setItem(INFO_HEALTH_SLOT, healthInfo);
 
-        // 9칸: 다른 플레이어 배치판 보기
-        ItemStack spectateButton = createSpectateButton();
-        inv.setItem(HOTBAR_SPECTATE, spectateButton);
+        // 18칸: 시너지 정보
+        ItemStack synergyInfo = new ItemStack(Material.ENCHANTED_BOOK);
+        ItemMeta synergyMeta = synergyInfo.getItemMeta();
+        synergyMeta.setDisplayName("§d§l시너지 정보");
+        List<String> synergyLore = new ArrayList<>();
+        synergyLore.add("§7현재 활성화된 시너지:");
+        // TODO: 시너지 계산 및 표시
+        synergyLore.add("§8(구현 예정)");
+        synergyMeta.setLore(synergyLore);
+        synergyInfo.setItemMeta(synergyMeta);
+        gui.setItem(INFO_SYNERGY_SLOT, synergyInfo);
+
+        // 27칸: 재화 정보
+        ItemStack resourceInfo = new ItemStack(Material.GOLD_INGOT);
+        ItemMeta resourceMeta = resourceInfo.getItemMeta();
+        resourceMeta.setDisplayName("§6§l재화 정보");
+        List<String> resourceLore = new ArrayList<>();
+        resourceLore.add("§7보유 골드: §6" + gamePlayer.getGold() + "G");
+        resourceLore.add("§7현재 레벨: §e" + gamePlayer.getLevel());
+        resourceLore.add("§7현재 경험치: §a" + gamePlayer.getExperience() + " XP");
+        resourceMeta.setLore(resourceLore);
+        resourceInfo.setItemMeta(resourceMeta);
+        gui.setItem(INFO_RESOURCES_SLOT, resourceInfo);
     }
 
     /**
@@ -236,13 +346,12 @@ public class InventoryGUIManager {
     }
 
     /**
-     * 벤치 슬롯 설정 (인벤토리 중간 줄)
+     * 벤치 슬롯 설정 (28~35칸)
      */
-    private void setupBenchSlots(Player player, GamePlayer gamePlayer) {
-        Inventory inv = player.getInventory();
+    private void setupBenchSlots(Inventory gui, GamePlayer gamePlayer) {
         List<Unit> bench = gamePlayer.getBench();
 
-        for (int i = 0; i < 9; i++) {
+        for (int i = 0; i < 8; i++) {
             int slot = INV_BENCH_START + i;
             if (i < bench.size() && bench.get(i) != null) {
                 Unit unit = bench.get(i);
@@ -251,106 +360,120 @@ public class InventoryGUIManager {
                 ItemMeta meta = unitItem.getItemMeta();
                 List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
                 lore.add("");
-                lore.add("§7위쪽 배치판으로 드래그하여 배치");
-                lore.add("§7아래쪽 판매 슬롯으로 드래그하여 판매");
+                lore.add("§e좌클릭: 빈 배치판 칸에 배치");
+                lore.add("§eShift + 우클릭: 유닛 판매");
                 meta.setLore(lore);
                 unitItem.setItemMeta(meta);
 
-                inv.setItem(slot, unitItem);
+                gui.setItem(slot, unitItem);
             } else {
-                inv.setItem(slot, null);
+                // 빈 벤치 칸
+                ItemStack emptyBench = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
+                ItemMeta meta = emptyBench.getItemMeta();
+                meta.setDisplayName("§7빈 벤치 칸");
+                List<String> lore = new ArrayList<>();
+                lore.add("§7상점에서 유닛을 구매하면");
+                lore.add("§7이곳에 배치됩니다");
+                meta.setLore(lore);
+                emptyBench.setItemMeta(meta);
+                gui.setItem(slot, emptyBench);
             }
         }
     }
 
     /**
-     * 판매 슬롯 설정 (인벤토리 하단 줄)
+     * 레벨 정보 설정 (36칸)
      */
-    private void setupSellSlots(Player player) {
-        Inventory inv = player.getInventory();
+    private void setupLevelInfo(Inventory gui, GamePlayer gamePlayer) {
+        ItemStack levelInfo = new ItemStack(Material.NETHER_STAR);
+        ItemMeta meta = levelInfo.getItemMeta();
+        meta.setDisplayName("§e§l레벨 정보");
 
-        // 판매 슬롯 전체를 판매 아이콘으로 채움
-        ItemStack sellIcon = new ItemStack(Material.RED_STAINED_GLASS_PANE);
-        ItemMeta meta = sellIcon.getItemMeta();
-        meta.setDisplayName("§c§l판매 영역");
         List<String> lore = new ArrayList<>();
-        lore.add("§7벤치 유닛을 우클릭하고");
-        lore.add("§7이 영역을 클릭하여 판매");
-        meta.setLore(lore);
-        sellIcon.setItemMeta(meta);
+        lore.add("§7현재 레벨: §e" + gamePlayer.getLevel());
+        lore.add("§7현재 경험치: §a" + gamePlayer.getExperience() + " XP");
 
-        for (int i = INV_SELL_START; i <= INV_SELL_END; i++) {
-            inv.setItem(i, sellIcon);
+        // 레벨별 필요 경험치
+        int[] xpRequired = new int[9];
+        for (int i = 1; i <= 8; i++) {
+            xpRequired[i] = plugin.getConfig().getInt("game.xp-required." + i, i * 2);
+        }
+
+        if (gamePlayer.getLevel() < 8) {
+            int requiredXP = xpRequired[gamePlayer.getLevel()];
+            lore.add("§7필요 경험치: §a" + requiredXP + " XP");
+        } else {
+            lore.add("§6§l최대 레벨!");
+        }
+
+        lore.add("");
+        lore.add("§7최대 배치 유닛: §e" + gamePlayer.getMaxBoardUnits() + "개");
+
+        meta.setLore(lore);
+        levelInfo.setItemMeta(meta);
+        gui.setItem(INFO_LEVEL_SLOT, levelInfo);
+    }
+
+    /**
+     * 필러 슬롯 설정 (37~45칸)
+     */
+    private void setupFillers(Inventory gui) {
+        ItemStack filler = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
+        ItemMeta meta = filler.getItemMeta();
+        meta.setDisplayName(" ");
+        filler.setItemMeta(meta);
+
+        for (int i = FILLER_START; i <= FILLER_END; i++) {
+            gui.setItem(i, filler);
         }
     }
 
     /**
-     * 배치판 GUI 열기 (상자 형태, 상단)
+     * 버튼 설정 (46, 47, 54칸)
      */
-    public void openBoardGUI(Player player, GamePlayer gamePlayer) {
-        // 54칸 더블 체스트 (8x6 = 48칸 사용)
-        Inventory boardInv = Bukkit.createInventory(null, 27, "§2§l배치판");
+    private void setupButtons(Inventory gui, GamePlayer gamePlayer) {
+        // 46칸: 경험치 업
+        ItemStack xpButton = createXPButton(gamePlayer);
+        gui.setItem(BUTTON_XP_SLOT, xpButton);
 
-        // 현재 보드 상태 표시 (8x6)
-        Map<Position, Unit> board = gamePlayer.getBoard();
+        // 47칸: 리롤
+        ItemStack rerollButton = createRerollButton(gamePlayer);
+        gui.setItem(BUTTON_REROLL_SLOT, rerollButton);
 
-        for (int y = 0; y < 3; y++) {
-            for (int x = 0; x < 8; x++) {
-                int slot = y * 9 + x; // 9열씩, x 위치
-                Position pos = new Position(x, y);
+        // 54칸: 관전 버튼
+        ItemStack spectateButton = createSpectateButton();
+        gui.setItem(BUTTON_SPECTATE_SLOT, spectateButton);
+    }
 
-                Unit unit = board.get(pos);
-                if (unit != null) {
-                    ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey());
+    /**
+     * 상점 설정 (48~52칸)
+     */
+    private void setupShop(Inventory gui, GamePlayer gamePlayer, Player player) {
+        List<Unit> shopUnits = playerShops.computeIfAbsent(player.getUniqueId(),
+            k -> shopManager.generateShop(gamePlayer.getLevel()));
 
-                    ItemMeta meta = unitItem.getItemMeta();
-                    List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
-                    lore.add("");
-                    lore.add("§7위치: §e" + x + ", " + y);
-                    lore.add("§7클릭하여 벤치로 이동");
-                    meta.setLore(lore);
-                    unitItem.setItemMeta(meta);
+        for (int i = 0; i < 5; i++) {
+            int slot = SHOP_START + i;
+            if (i < shopUnits.size() && shopUnits.get(i) != null) {
+                Unit unit = shopUnits.get(i);
+                ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey());
 
-                    boardInv.setItem(slot, unitItem);
-                } else {
-                    // 빈 슬롯 표시
-                    ItemStack emptySlot = new ItemStack(Material.LIGHT_GRAY_STAINED_GLASS_PANE);
-                    ItemMeta meta = emptySlot.getItemMeta();
-                    meta.setDisplayName("§7빈 칸");
-                    emptySlot.setItemMeta(meta);
-                    boardInv.setItem(slot, emptySlot);
-                }
+                // 가격 정보 추가
+                ItemMeta meta = unitItem.getItemMeta();
+                List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
+                lore.add("");
+                lore.add("§6구매 비용: " + unit.getCost() + "G");
+                lore.add("§e클릭하여 구매");
+                meta.setLore(lore);
+                unitItem.setItemMeta(meta);
+
+                gui.setItem(slot, unitItem);
+            } else {
+                gui.setItem(slot, null);
             }
         }
-
-        // 8번째 열은 구분선 (사용 안 함)
-        for (int i = 8; i < 54; i += 9) {
-            ItemStack separator = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
-            ItemMeta meta = separator.getItemMeta();
-            meta.setDisplayName(" ");
-            separator.setItemMeta(meta);
-            boardInv.setItem(i, separator);
-        }
-
-        player.openInventory(boardInv);
     }
 
-    /**
-     * 상점 토글
-     */
-    public void toggleShop(Player player, GamePlayer gamePlayer) {
-        UUID playerId = player.getUniqueId();
-        boolean currentState = shopOpenState.getOrDefault(playerId, true);
-        shopOpenState.put(playerId, !currentState);
-
-        setupGameInventory(player, gamePlayer);
-
-        if (!currentState) {
-            player.sendMessage("§a상점을 열었습니다!");
-        } else {
-            player.sendMessage("§c상점을 닫았습니다!");
-        }
-    }
 
     /**
      * 상점 새로고침
@@ -414,6 +537,12 @@ public class InventoryGUIManager {
         // 인벤토리 새로고침
         setupGameInventory(player, gamePlayer);
 
+        // 스코어보드 업데이트
+        var game = plugin.getGameManager().getPlayerGame(playerId);
+        if (game != null) {
+            game.updateAllScoreboards();
+        }
+
         return true;
     }
 
@@ -432,10 +561,9 @@ public class InventoryGUIManager {
 
         int slot = 0;
         for (com.matochess.data.GamePlayer gp : players.values()) {
-            if (gp.getPlayerId().equals(player.getUniqueId())) continue; // 자기 자신 제외
-
             Player target = gp.getPlayer();
             if (target == null) continue;
+            if (target.getUniqueId().equals(player.getUniqueId())) continue; // 자기 자신 제외
 
             ItemStack skull = new ItemStack(Material.PLAYER_HEAD);
             SkullMeta meta = (SkullMeta) skull.getItemMeta();
@@ -505,7 +633,6 @@ public class InventoryGUIManager {
      */
     public void clearPlayerShop(UUID playerId) {
         playerShops.remove(playerId);
-        shopOpenState.remove(playerId);
         spectatingPlayers.remove(playerId);
     }
 }

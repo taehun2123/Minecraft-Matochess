@@ -1,6 +1,7 @@
 package com.matochess.game;
 
 import com.matochess.MatoChessPlugin;
+import com.matochess.core.SynergyManager;
 import com.matochess.data.*;
 import org.bukkit.*;
 import org.bukkit.boss.BarColor;
@@ -8,6 +9,7 @@ import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.scoreboard.*;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -33,6 +35,10 @@ public class GameInstance {
     // 보스바
     private BossBar bossBar;
     private int phaseTimeRemaining;
+    private BukkitTask bossBarTask; // 보스바 타이머 태스크
+
+    // 스코어보드 (플레이어별)
+    private final Map<UUID, Scoreboard> playerScoreboards;
 
     // Configuration from config.yml
     private final int preparationTime;
@@ -50,6 +56,7 @@ public class GameInstance {
         this.playerIds = new ArrayList<>(playerIds);
         this.players = new HashMap<>();
         this.playerArenas = new HashMap<>();
+        this.playerScoreboards = new HashMap<>();
         this.currentPhase = GamePhase.WAITING;
         this.currentRound = 0;
 
@@ -82,7 +89,7 @@ public class GameInstance {
         for (UUID playerId : playerIds) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
-                GamePlayer gamePlayer = new GamePlayer(player, startingGold, startingLevel, startingHp);
+                GamePlayer gamePlayer = new GamePlayer(player, gameId, startingGold, startingLevel, startingHp);
                 players.put(playerId, gamePlayer);
 
                 // 각 플레이어에게 아레나 할당
@@ -96,6 +103,9 @@ public class GameInstance {
 
                 // 플레이어에게 보스바 표시
                 bossBar.addPlayer(player);
+
+                // 스코어보드 초기화
+                setupScoreboard(player, gamePlayer);
             }
         }
     }
@@ -182,6 +192,12 @@ public class GameInstance {
                     player.sendMessage("§a레벨 업! 현재 레벨: " + gp.getLevel());
                 }
 
+                // 준비 단계 시작 시 자동 합성 체크 (벤치 + 보드의 모든 유닛)
+                int upgraded = gp.autoUpgradeUnits();
+                if (upgraded > 0) {
+                    player.sendMessage("§a" + upgraded + "개 유닛이 자동 합성되었습니다!");
+                }
+
                 // Send notification
                 player.sendMessage("§6=== 라운드 " + currentRound + " ===");
                 player.sendMessage("§e준비 단계: " + preparationTime + "초");
@@ -198,6 +214,9 @@ public class GameInstance {
         }
 
         broadcast("&e라운드 " + currentRound + " - 준비 단계 (" + preparationTime + "초)");
+
+        // 모든 플레이어 스코어보드 업데이트
+        updateAllScoreboards();
 
         // 남은 시간 초기화 및 타이머 시작
         phaseTimeRemaining = preparationTime;
@@ -446,7 +465,13 @@ public class GameInstance {
      * 보스바 타이머 시작 (1초마다 업데이트)
      */
     private void startBossBarTimer() {
-        Bukkit.getScheduler().runTaskTimer(plugin, new Runnable() {
+        // 기존 타이머가 있으면 취소
+        if (bossBarTask != null && !bossBarTask.isCancelled()) {
+            bossBarTask.cancel();
+        }
+
+        // 새 타이머 시작 (정확히 1초마다 = 20틱)
+        bossBarTask = Bukkit.getScheduler().runTaskTimer(plugin, new Runnable() {
             @Override
             public void run() {
                 if (phaseTimeRemaining > 0) {
@@ -461,9 +486,14 @@ public class GameInstance {
                         progress = (double) phaseTimeRemaining / combatTime;
                     }
                     bossBar.setProgress(Math.max(0.0, Math.min(1.0, progress)));
+                } else {
+                    // 시간이 0이 되면 타이머 종료
+                    if (bossBarTask != null) {
+                        bossBarTask.cancel();
+                    }
                 }
             }
-        }, 0L, 20L); // 1초마다 실행
+        }, 20L, 20L); // 1초 후 시작, 1초마다 실행 (20틱 = 1초)
     }
 
     /**
@@ -505,5 +535,155 @@ public class GameInstance {
 
     public Arena getPlayerArena(UUID playerId) {
         return playerArenas.get(playerId);
+    }
+
+    /**
+     * 스코어보드 설정 (초기화)
+     */
+    private void setupScoreboard(Player player, GamePlayer gamePlayer) {
+        ScoreboardManager manager = Bukkit.getScoreboardManager();
+        if (manager == null) return;
+
+        Scoreboard scoreboard = manager.getNewScoreboard();
+        Objective objective = scoreboard.registerNewObjective("matochess", "dummy", "§6§l마토체스");
+        objective.setDisplaySlot(DisplaySlot.SIDEBAR);
+
+        playerScoreboards.put(player.getUniqueId(), scoreboard);
+        player.setScoreboard(scoreboard);
+
+        // 초기 업데이트
+        updateScoreboard(player, gamePlayer);
+    }
+
+    /**
+     * 스코어보드 업데이트 (시너지 + 모든 플레이어 HP/연승/연패)
+     */
+    private void updateScoreboard(Player player, GamePlayer gamePlayer) {
+        Scoreboard scoreboard = playerScoreboards.get(player.getUniqueId());
+        if (scoreboard == null) return;
+
+        Objective objective = scoreboard.getObjective("matochess");
+        if (objective == null) return;
+
+        // 기존 스코어 초기화
+        for (String entry : scoreboard.getEntries()) {
+            scoreboard.resetScores(entry);
+        }
+
+        int line = 15; // 스코어보드는 아래에서 위로 (15 -> 1)
+
+        // === 시너지 정보 ===
+        objective.getScore("§e§l━━━━━ 시너지 ━━━━━").setScore(line--);
+
+        // 보드에 있는 유닛들로 시너지 계산
+        List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
+        Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies =
+            plugin.getSynergyManager().calculateSynergies(boardUnits);
+
+        // 모든 시너지 표시 (활성/비활성 모두)
+        Map<UnitTrait, Integer> traitCounts = new HashMap<>();
+        for (Unit unit : boardUnits) {
+            for (UnitTrait trait : unit.getTraits()) {
+                traitCounts.put(trait, traitCounts.getOrDefault(trait, 0) + 1);
+            }
+        }
+
+        // 모든 시너지를 순회하며 표시
+        for (UnitTrait trait : UnitTrait.values()) {
+            int count = traitCounts.getOrDefault(trait, 0);
+
+            // 시너지가 하나도 없는 경우는 표시하지 않음
+            if (count == 0) continue;
+
+            // 해당 시너지의 모든 티어 정보 가져오기
+            List<TraitBonus> bonuses = plugin.getSynergyManager().getTraitBonuses(trait);
+            if (bonuses.isEmpty()) continue;
+
+            // 활성화된 시너지인지 확인
+            SynergyManager.ActiveSynergy activeSynergy = activeSynergies.get(trait);
+
+            if (activeSynergy != null) {
+                // 활성화된 시너지 (골드 색상)
+                TraitBonus activeBonus = activeSynergy.getActiveBonus();
+                String display = String.format("§6%s §f(%d/%d) §a✓",
+                    trait.getDisplayName(),
+                    count,
+                    activeBonus.getRequiredCount());
+                objective.getScore(display).setScore(line--);
+            } else {
+                // 비활성화된 시너지 (회색)
+                // 다음 티어 목표 표시
+                TraitBonus nextTier = bonuses.stream()
+                    .filter(b -> count < b.getRequiredCount())
+                    .min(Comparator.comparingInt(TraitBonus::getRequiredCount))
+                    .orElse(null);
+
+                if (nextTier != null) {
+                    String display = String.format("§7%s §f(%d/%d)",
+                        trait.getDisplayName(),
+                        count,
+                        nextTier.getRequiredCount());
+                    objective.getScore(display).setScore(line--);
+                }
+            }
+        }
+
+        // 시너지가 없으면 메시지 표시
+        if (traitCounts.isEmpty()) {
+            objective.getScore("§7유닛을 배치하세요").setScore(line--);
+        }
+
+        objective.getScore("§r").setScore(line--); // 빈 줄
+
+        // === 플레이어 정보 ===
+        objective.getScore("§e§l━━━ 플레이어 ━━━").setScore(line--);
+
+        // 모든 플레이어 정보 표시 (HP 내림차순)
+        List<GamePlayer> sortedPlayers = players.values().stream()
+            .sorted(Comparator.comparingInt(GamePlayer::getHealth).reversed())
+            .collect(Collectors.toList());
+
+        for (GamePlayer gp : sortedPlayers) {
+            Player p = gp.getPlayer();
+            if (p == null) continue;
+
+            // 자신은 파란색, 다른 플레이어는 회색
+            String nameColor = gp.getPlayerId().equals(player.getUniqueId()) ? "§b" : "§7";
+
+            // 생존/탈락 표시
+            String status = gp.isAlive() ? "§a❤" : "§c✖";
+
+            // 연승/연패 표시
+            String streak = "";
+            if (gp.getWinStreak() > 0) {
+                streak = " §e⬆" + gp.getWinStreak();
+            } else if (gp.getLoseStreak() > 0) {
+                streak = " §c⬇" + gp.getLoseStreak();
+            }
+
+            String display = String.format("%s%s §f%dHP%s %s",
+                nameColor,
+                p.getName().length() > 8 ? p.getName().substring(0, 8) : p.getName(),
+                gp.getHealth(),
+                streak,
+                status);
+
+            objective.getScore(display).setScore(line--);
+        }
+
+        objective.getScore("§r§r").setScore(line--); // 빈 줄
+        objective.getScore("§7라운드: §f" + currentRound).setScore(line--);
+    }
+
+    /**
+     * 모든 플레이어의 스코어보드 업데이트
+     */
+    public void updateAllScoreboards() {
+        for (GamePlayer gp : players.values()) {
+            Player player = gp.getPlayer();
+            if (player != null && player.isOnline()) {
+                updateScoreboard(player, gp);
+            }
+        }
     }
 }

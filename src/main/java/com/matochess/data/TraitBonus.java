@@ -24,6 +24,27 @@ public class TraitBonus {
         this.description = description;
     }
 
+    // Manual getters
+    public UnitTrait getTrait() {
+        return trait;
+    }
+
+    public int getRequiredCount() {
+        return requiredCount;
+    }
+
+    public BonusType getBonusType() {
+        return bonusType;
+    }
+
+    public double getBonusValue() {
+        return bonusValue;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
     /**
      * Types of bonuses that can be applied
      */

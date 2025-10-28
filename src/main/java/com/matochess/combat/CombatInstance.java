@@ -2,6 +2,7 @@ package com.matochess.combat;
 
 import com.matochess.MatoChessPlugin;
 import com.matochess.core.SynergyManager;
+import com.matochess.data.Arena;
 import com.matochess.data.GamePlayer;
 import com.matochess.data.TraitBonus;
 import com.matochess.data.Unit;
@@ -26,6 +27,7 @@ public class CombatInstance {
     private final int pveRound;
 
     private final BoardManager boardManager;
+    private final Arena combatArena; // 🚨 새 필드: 전투가 일어날 아레나
     private final Map<LivingEntity, Unit> entityToUnit;
     private final Map<UUID, LivingEntity> team1Entities; // Blue team
     private final Map<UUID, LivingEntity> team2Entities; // Red team
@@ -37,11 +39,12 @@ public class CombatInstance {
     /**
      * Constructor for PVP combat
      */
-    public CombatInstance(MatoChessPlugin plugin, UUID combatId, GamePlayer player1, GamePlayer player2) {
+    public CombatInstance(MatoChessPlugin plugin, UUID combatId, GamePlayer player1, GamePlayer player2, Arena combatArena) {
         this.plugin = plugin;
         this.combatId = combatId;
         this.player1 = player1;
         this.player2 = player2;
+        this.combatArena = combatArena;
         this.isPVE = false;
         this.pveRound = 0;
         this.isFinished = false;
@@ -56,10 +59,11 @@ public class CombatInstance {
     /**
      * Constructor for PVE combat
      */
-    public CombatInstance(MatoChessPlugin plugin, UUID combatId, GamePlayer player, int round) {
+    public CombatInstance(MatoChessPlugin plugin, UUID combatId, GamePlayer player, int round, Arena combatArena) {
         this.plugin = plugin;
         this.combatId = combatId;
         this.player1 = player;
+        this.combatArena = combatArena;
         this.player2 = null;
         this.isPVE = true;
         this.pveRound = round;
@@ -76,6 +80,8 @@ public class CombatInstance {
      * 전투 시작
      */
     public void start() {
+        teleportPlayersToCombatArena();
+
         player1.getPlayer().sendMessage("§c§l전투 시작!");
         player1.getPlayer().playSound(player1.getPlayer().getLocation(),
             org.bukkit.Sound.ENTITY_ENDER_DRAGON_GROWL, 1.0f, 1.0f);
@@ -104,6 +110,48 @@ public class CombatInstance {
                 endCombat(true); // Draw
             }
         }, plugin.getConfig().getInt("game.combat-time", 60) * 20L);
+    }
+
+    /**
+     * 🚨 새 메서드: 플레이어를 전투 아레나의 관전 위치로 텔레포트합니다.
+     * (이 로직은 GameInstance의 teleportToArenaView 로직을 재사용해야 합니다.)
+     */
+    private void teleportPlayersToCombatArena() {
+        // player1 텔레포트
+        teleportSinglePlayerToCombatArena(player1);
+
+        // player2 텔레포트 (PVP일 경우)
+        if (!isPVE && player2 != null) {
+            teleportSinglePlayerToCombatArena(player2);
+        }
+    }
+
+    private void teleportSinglePlayerToCombatArena(GamePlayer gp) {
+        org.bukkit.entity.Player player = gp.getPlayer();
+        if (player == null || !player.isOnline() || combatArena == null) return;
+
+        Location pos1 = combatArena.getPos1();
+        Location pos2 = combatArena.getPos2();
+
+        // 8x6 보드판의 중심 좌표 계산 (GameInstance의 로직 재사용)
+        double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
+        double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
+        double boardY = Math.min(pos1.getY(), pos2.getY());
+
+        // 카메라 위치: 보드판 중심 위쪽
+        double cameraY = boardY + 8; // 8블록 위
+        double cameraZ = centerZ + 5; // 보드 뒤쪽으로 5블록
+
+        Location cameraPos = new Location(pos1.getWorld(), centerX, cameraY, cameraZ);
+
+        // 시점 유지를 위해 플레이어의 현재 시점을 재사용 (이전 답변에서 수정했던 로직)
+        float currentYaw = player.getLocation().getYaw();
+        float currentPitch = player.getLocation().getPitch();
+
+        Location teleportLoc = new Location(cameraPos.getWorld(), cameraPos.getX(), cameraPos.getY(), cameraPos.getZ(), currentYaw, currentPitch);
+
+        player.teleport(teleportLoc);
+        plugin.getLogger().info("Player " + player.getName() + " teleported to combat arena view.");
     }
 
     /**
@@ -136,7 +184,7 @@ public class CombatInstance {
     private void spawnUnits() {
         // Spawn team 1 (blue team)
         player1.getBoard().forEach((position, unit) -> {
-            LivingEntity entity = boardManager.spawnUnit(unit, position, true);
+            LivingEntity entity = boardManager.spawnUnit(unit, position, true, combatArena);
             if (entity != null) {
                 team1Entities.put(unit.getInstanceId(), entity);
                 entityToUnit.put(entity, unit);
@@ -146,7 +194,7 @@ public class CombatInstance {
         // Spawn team 2 (red team) or PVE monsters
         if (!isPVE && player2 != null) {
             player2.getBoard().forEach((position, unit) -> {
-                LivingEntity entity = boardManager.spawnUnit(unit, position, false);
+                LivingEntity entity = boardManager.spawnUnit(unit, position, false, combatArena);
                 if (entity != null) {
                     team2Entities.put(unit.getInstanceId(), entity);
                     entityToUnit.put(entity, unit);
@@ -346,7 +394,7 @@ public class CombatInstance {
 
             com.matochess.data.Position position = new com.matochess.data.Position(col, row);
 
-            LivingEntity entity = boardManager.spawnUnit(monster, position, false); // Red team side
+            LivingEntity entity = boardManager.spawnUnit(monster, position, false, combatArena); // Red team side
             if (entity != null) {
                 team2Entities.put(monster.getInstanceId(), entity);
                 entityToUnit.put(entity, monster);

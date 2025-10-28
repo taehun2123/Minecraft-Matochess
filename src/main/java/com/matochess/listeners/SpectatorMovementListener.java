@@ -10,6 +10,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerMoveEvent;
+import java.util.UUID; // UUID import 추가
 
 /**
  * 게임 중 옵저버 모드 플레이어의 이동을 제한하는 리스너
@@ -18,6 +19,9 @@ import org.bukkit.event.player.PlayerMoveEvent;
 public class SpectatorMovementListener implements Listener {
 
     private final MatoChessPlugin plugin;
+    // 경고 메시지 스팸 방지용 쿨타임
+    private final java.util.Map<java.util.UUID, Long> lastWarningTime = new java.util.HashMap<>();
+    private static final long WARNING_COOLDOWN = 3000L; // 3초
 
     public SpectatorMovementListener(MatoChessPlugin plugin) {
         this.plugin = plugin;
@@ -42,8 +46,20 @@ public class SpectatorMovementListener implements Listener {
             return;
         }
 
-        // 플레이어의 아레나 가져오기
-        Arena arena = game.getPlayerArena(player.getUniqueId());
+        // ----------------------------------------------------
+        // 체크할 아레나의 주인을 결정합니다.
+        // ----------------------------------------------------
+        UUID currentBoardOwnerId = player.getUniqueId(); // 기본값: 자기 자신
+
+        UUID spectatingTargetId = plugin.getInventoryGUIManager().getSpectatingTarget(player.getUniqueId());
+
+        if (spectatingTargetId != null) {
+            // 관전 중이라면, 아레나 주인은 관전 대상입니다.
+            currentBoardOwnerId = spectatingTargetId;
+        }
+
+        // 결정된 주인의 아레나 가져오기
+        Arena arena = game.getPlayerArena(currentBoardOwnerId);
         if (arena == null) {
             return;
         }
@@ -51,6 +67,14 @@ public class SpectatorMovementListener implements Listener {
         // 이동 후 위치 확인
         Location to = event.getTo();
         if (to == null) {
+            return;
+        }
+
+        // 블록 단위 이동이 없으면 (시점 변경만 있으면) 무시
+        Location from = event.getFrom();
+        if (to.getBlockX() == from.getBlockX() &&
+                to.getBlockY() == from.getBlockY() &&
+                to.getBlockZ() == from.getBlockZ()) {
             return;
         }
 
@@ -72,7 +96,12 @@ public class SpectatorMovementListener implements Listener {
 
         if (x < minX || x > maxX || y < minY || y > maxY || z < minZ || z > maxZ) {
             event.setCancelled(true);
-            player.sendMessage("§c보드판 영역을 벗어날 수 없습니다!");
+// 경고 메시지 스팸 방지 적용
+            long now = System.currentTimeMillis();
+            if (now - lastWarningTime.getOrDefault(player.getUniqueId(), 0L) > WARNING_COOLDOWN) {
+                player.sendMessage("§c경고! 배치판 영역을 벗어날 수 없습니다!");
+                lastWarningTime.put(player.getUniqueId(), now);
+            }
         }
     }
 }

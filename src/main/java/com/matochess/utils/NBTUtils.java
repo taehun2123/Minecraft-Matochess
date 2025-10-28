@@ -4,6 +4,7 @@ import com.matochess.data.Equipment;
 import com.matochess.data.Unit;
 import com.matochess.data.UnitLevel;
 import com.matochess.data.UnitTier;
+import com.matochess.data.UnitTrait;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
@@ -85,6 +86,16 @@ public class NBTUtils {
         lore.add(ChatColor.GRAY + "레벨: " + unit.getLevel().getDisplay());
         lore.add(ChatColor.GRAY + "비용: " + ChatColor.GOLD + unit.getCost() + "G");
         lore.add("");
+
+        // 시너지 정보 추가
+        if (!unit.getTraits().isEmpty()) {
+            lore.add(ChatColor.LIGHT_PURPLE + "시너지:");
+            for (UnitTrait trait : unit.getTraits()) {
+                lore.add(ChatColor.GRAY + "  • " + ChatColor.GOLD + trait.getDisplayName());
+            }
+            lore.add("");
+        }
+
         lore.add(ChatColor.GREEN + "체력: " + String.format("%.1f", unit.getHealth()));
         lore.add(ChatColor.RED + "공격력: " + String.format("%.1f", unit.getAttackDamage()));
         lore.add(ChatColor.YELLOW + "공격 속도: " + String.format("%.1f", unit.getAttackSpeed()));

@@ -1,6 +1,7 @@
 package com.matochess.listeners;
 
 import com.matochess.MatoChessPlugin;
+import com.matochess.data.GamePhase;
 import com.matochess.data.GamePlayer;
 import com.matochess.data.Position;
 import com.matochess.data.Unit;
@@ -12,13 +13,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.inventory.InventoryDragEvent;
-import org.bukkit.event.inventory.InventoryOpenEvent;
-import org.bukkit.event.inventory.InventoryType;
-import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.inventory.*;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.SkullMeta;
+import org.bukkit.Bukkit;
+
 
 import java.util.UUID;
 
@@ -37,13 +36,45 @@ public class InventoryGUIListener implements Listener {
 
     /**
      * 인벤토리 열기 이벤트 (E키 감지)
-     * 게임 중인 플레이어가 E키를 누르면 통합 GUI가 이미 설정되어 있음
-     * 별도의 처리 불필요 - setupGameInventory에서 이미 통합 UI 설정됨
+     * 게임 중인 플레이어가 E키를 누르면 54칸 통합 GUI를 자동으로 열어줌
      */
     @EventHandler(priority = EventPriority.HIGHEST)
     public void onInventoryOpen(InventoryOpenEvent event) {
-        // E키로 인벤토리를 열 때는 이미 setupGameInventory로 설정된 통합 UI가 표시됨
-        // 별도의 처리 불필요
+        if (!(event.getPlayer() instanceof Player)) return;
+
+        Player player = (Player) event.getPlayer();
+        GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+        if (game == null) return;
+
+        GamePlayer gamePlayer = game.getPlayer(player.getUniqueId());
+        if (gamePlayer == null) return;
+
+        // 기본 인벤토리(PLAYER)를 열려고 할 때 54칸 통합 GUI로 대체
+        if (event.getInventory().getType() == InventoryType.CRAFTING) {
+            event.setCancelled(true);
+            // 1틱 후에 통합 GUI 열기 (이벤트 충돌 방지)
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                guiManager.setupGameInventory(player, gamePlayer);
+            });
+        }
+    }
+
+    /**
+     * 인벤토리 닫기 이벤트
+     * 통합 GUI를 닫아도 자동으로 다시 열지 않음 (플레이어가 E키를 다시 눌러야 함)
+     */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onInventoryClose(org.bukkit.event.inventory.InventoryCloseEvent event) {
+        if (!(event.getPlayer() instanceof Player)) return;
+
+        Player player = (Player) event.getPlayer();
+        GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+        if (game == null) return;
+
+        String title = event.getView().getTitle();
+
+        // 통합 GUI를 닫은 경우, 다음에 E키를 누르면 다시 통합 GUI가 열림
+        // 별도의 처리 불필요 - onInventoryOpen에서 자동으로 처리됨
     }
 
     /**
@@ -64,98 +95,78 @@ public class InventoryGUIListener implements Listener {
         int slot = event.getSlot();
         ItemStack clickedItem = event.getCurrentItem();
 
-        // 배치판 GUI
-        if (title.contains("배치판")) {
-            handleBoardGUIClick(player, gamePlayer, event);
-            return;
-        }
-
         // 플레이어 목록 GUI
         if (title.contains("플레이어 목록")) {
             handleSpectateListClick(player, event);
             return;
         }
 
-        // 플레이어 자신의 인벤토리
-        if (event.getClickedInventory() != null &&
-            event.getClickedInventory().getType() == InventoryType.PLAYER) {
-
-            // 핫바 클릭 (0-8)
-            if (slot >= 0 && slot <= 8) {
-                handleHotbarClick(player, gamePlayer, slot, event);
-            }
-
-            // 벤치 슬롯 (9-17, 1줄)
-            else if (slot >= 9 && slot <= 17) {
-                event.setCancelled(true);
-                ItemStack item = event.getCurrentItem();
-                if (item != null && item.getType() != Material.AIR && NBTUtils.isUnitItem(item, plugin.getKey())) {
-                    // 유닛 정보 가져오기
-                    UUID unitInstanceId = NBTUtils.getUnitInstanceId(item, plugin.getKey());
-
-                    // 벤치에서 해당 유닛 찾기
-                    Unit selectedUnit = null;
-                    for (Unit unit : gamePlayer.getBench()) {
-                        if (unit.getInstanceId().equals(unitInstanceId)) {
-                            selectedUnit = unit;
-                            break;
-                        }
-                    }
-
-                    if (selectedUnit != null) {
-                        if (event.isRightClick()) {
-                            // 우클릭 - 판매용으로 선택
-                            guiManager.selectUnitForSale(player.getUniqueId(), selectedUnit);
-                            player.sendMessage("§e" + selectedUnit.getName() + " §7판매 선택! 빨간 유리를 클릭하세요.");
-                        } else {
-                            // 좌클릭 - 배치용으로 선택
-                            plugin.getGUIManager().selectUnitForPlacement(player, selectedUnit);
-                            // 배치 GUI 열기
-                            plugin.getGUIManager().openBoardGUI(player, gamePlayer);
-                        }
-                    }
-                }
-            }
-
-            // 판매 슬롯 (18-26, 2번째 줄)
-            else if (slot >= 18 && slot <= 26) {
-                handleSellSlotClick(player, gamePlayer, event);
-            }
+        // 54칸 통합 GUI (마토체스)
+        if (title.contains("마토체스")) {
+            event.setCancelled(true); // 모든 클릭 취소 (드래그 방지)
+            handleIntegratedGUIClick(player, gamePlayer, slot, event);
+            return;
         }
     }
 
     /**
-     * 핫바 클릭 처리
+     * 54칸 통합 GUI 클릭 처리
      */
-    private void handleHotbarClick(Player player, GamePlayer gamePlayer, int slot, InventoryClickEvent event) {
-        event.setCancelled(true); // 핫바 아이템은 이동 불가
-
+    private void handleIntegratedGUIClick(Player player, GamePlayer gamePlayer, int slot, InventoryClickEvent event) {
         ItemStack item = event.getCurrentItem();
-        if (item == null || item.getType() == Material.AIR) return;
 
-        // 0번: 경험치 업
-        if (slot == 0) {
+        GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+        GamePhase currentPhase = (game != null) ? game.getCurrentPhase() : null;
+
+        // 배치판 슬롯 (1~8, 10~17, 19~26칸)
+        if (isBoardSlot(slot)) {
+            // 전투 단계에서는 배치 금지
+            if (currentPhase != null && currentPhase.isCombat()) {
+                player.sendMessage("§c전투 중에는 병력을 배치할 수 없습니다!");
+                return;
+            }
+            handleBoardSlotClick(player, gamePlayer, slot, item);
+        }
+        // 정보 패널 (9, 18, 27칸) - 클릭 무시
+        else if (slot == 8 || slot == 17 || slot == 26) {
+            // 정보 표시만, 클릭 불가
+        }
+        // 벤치 슬롯 (28~35칸)
+        else if (slot >= 27 && slot <= 34) {
+            // 전투 단계에서는 벤치 유닛 선택 금지 (판매는 가능)
+            if (currentPhase != null && currentPhase.isCombat() && event.isLeftClick()) {
+                player.sendMessage("§c전투 중에는 병력을 배치할 수 없습니다!");
+                return;
+            }
+            handleBenchSlotClick(player, gamePlayer, slot, item, event, currentPhase);
+        }
+        // 레벨 정보 (36칸) - 클릭 무시
+        else if (slot == 35) {
+            // 정보 표시만
+        }
+        // 필러 (37~45칸) - 클릭 무시
+        else if (slot >= 36 && slot <= 44) {
+            // 필러
+        }
+        // 경험치 업 버튼 (46칸)
+        else if (slot == 45) {
             handleXPBuy(player, gamePlayer);
         }
-
-        // 1번: 리롤
-        else if (slot == 1) {
+        // 리롤 버튼 (47칸)
+        else if (slot == 46) {
             handleReroll(player, gamePlayer);
         }
-
-        // 2-6번: 상점 유닛 구매
-        else if (slot >= 2 && slot <= 6) {
-            int shopIndex = slot - 2;
+        // 상점 유닛 (48~52칸)
+        else if (slot >= 47 && slot <= 51) {
+            int shopIndex = slot - 47;
             handleUnitPurchase(player, gamePlayer, shopIndex);
         }
-
-        // 7번: 상점 토글
-        else if (slot == 7) {
-            guiManager.toggleShop(player, gamePlayer);
+        // 빈 칸 (53칸) - 클릭 무시
+        else if (slot == 52) {
+            // 빈 칸
         }
-
-        // 8번: 관전 또는 돌아가기
-        else if (slot == 8) {
+        // 관전 버튼 (54칸)
+        else if (slot == 53) {
             if (guiManager.isSpectating(player.getUniqueId())) {
                 guiManager.stopSpectating(player);
             } else {
@@ -163,6 +174,130 @@ public class InventoryGUIListener implements Listener {
             }
         }
     }
+
+    /**
+     * 배치판 슬롯인지 확인
+     */
+    private boolean isBoardSlot(int slot) {
+        // 1~8, 10~17, 19~26칸
+        return (slot >= 0 && slot <= 7) ||
+               (slot >= 9 && slot <= 16) ||
+               (slot >= 18 && slot <= 25);
+    }
+
+    /**
+     * 배치판 슬롯 클릭 처리
+     */
+    private void handleBoardSlotClick(Player player, GamePlayer gamePlayer, int slot, ItemStack item) {
+        // 슬롯을 Position으로 변환
+        Position pos = slotToPosition(slot);
+        if (pos == null) return;
+
+        Unit unitAtPos = gamePlayer.getBoard().get(pos);
+
+        if (unitAtPos != null) {
+            // 배치된 유닛 클릭 - 벤치로 이동
+            if (gamePlayer.addUnitToBench(unitAtPos)) {
+                gamePlayer.removeUnitFromBoard(pos);
+                player.sendMessage("§a유닛을 벤치로 이동했습니다!");
+                guiManager.setupGameInventory(player, gamePlayer);
+                // 스코어보드 업데이트 (시너지 변경)
+                GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+                if (game != null) {
+                    game.updateAllScoreboards();
+                }
+            } else {
+                player.sendMessage("§c벤치가 가득 찼습니다!");
+            }
+        } else {
+            // 빈 칸 클릭 - 선택된 유닛 배치
+            Unit selectedUnit = guiManager.getSelectedUnitForPlacement(player.getUniqueId());
+            if (selectedUnit != null) {
+                // 벤치에서 제거하고 보드에 배치
+                if (gamePlayer.removeUnitFromBench(selectedUnit)) {
+                    if (gamePlayer.placeUnit(selectedUnit, pos)) {
+                        player.sendMessage("§a유닛을 배치했습니다!");
+                        guiManager.clearSelectedUnitForPlacement(player.getUniqueId());
+                        guiManager.setupGameInventory(player, gamePlayer);
+                        // 스코어보드 업데이트 (시너지 변경)
+                        GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+                        if (game != null) {
+                            game.updateAllScoreboards();
+                        }
+                    } else {
+                        // 배치 실패 - 벤치에 다시 추가
+                        gamePlayer.addUnitToBench(selectedUnit);
+                        player.sendMessage("§c배치할 수 없습니다! (최대 유닛 수 초과)");
+                    }
+                }
+            } else {
+                player.sendMessage("§e먼저 벤치에서 유닛을 선택하세요!");
+            }
+        }
+    }
+
+    /**
+     * 벤치 슬롯 클릭 처리
+     */
+    private void handleBenchSlotClick(Player player, GamePlayer gamePlayer, int slot, ItemStack item, InventoryClickEvent event, GamePhase currentPhase) {
+        if (item == null || item.getType() == Material.AIR || !NBTUtils.isUnitItem(item, plugin.getKey())) {
+            return;
+        }
+
+        // 유닛 정보 가져오기
+        UUID unitInstanceId = NBTUtils.getUnitInstanceId(item, plugin.getKey());
+
+        // 벤치에서 해당 유닛 찾기
+        Unit selectedUnit = gamePlayer.getBench().stream()
+                .filter(unit -> unit.getInstanceId().equals(unitInstanceId))
+                .findFirst()
+                .orElse(null);
+
+        if (selectedUnit != null) {
+            // Shift + 우클릭: 즉시 판매 (전투 중에도 가능)
+            if (event.isRightClick() && event.isShiftClick()) {
+                int goldGained = gamePlayer.sellUnit(selectedUnit);
+                player.sendMessage("§a유닛을 판매했습니다! §6+" + goldGained + "G");
+                guiManager.setupGameInventory(player, gamePlayer);
+                // 스코어보드 업데이트 (시너지 변경)
+                GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+                if (game != null) {
+                    game.updateAllScoreboards();
+                }
+            }
+            // 좌클릭: 배치용으로 선택 (전투 중에는 이미 막힘)
+            else if (event.isLeftClick()) {
+                guiManager.selectUnitForPlacement(player.getUniqueId(), selectedUnit);
+                player.sendMessage("§e" + selectedUnit.getName() + " §7선택! 빈 배치판 칸을 클릭하세요.");
+            }
+        }
+    }
+
+    /**
+     * 슬롯을 Position으로 변환
+     */
+    private Position slotToPosition(int slot) {
+        int row, col;
+
+        if (slot >= 0 && slot <= 7) {
+            // 1줄 (슬롯 0~7 = 1~8칸)
+            row = 0;
+            col = slot;
+        } else if (slot >= 9 && slot <= 16) {
+            // 2줄 (슬롯 9~16 = 10~17칸)
+            row = 1;
+            col = slot - 9;
+        } else if (slot >= 18 && slot <= 25) {
+            // 3줄 (슬롯 18~25 = 19~26칸)
+            row = 2;
+            col = slot - 18;
+        } else {
+            return null;
+        }
+
+        return new Position(col, row);
+    }
+
 
     /**
      * 경험치 구매
@@ -205,100 +340,6 @@ public class InventoryGUIListener implements Listener {
         guiManager.purchaseUnit(player, gamePlayer, shopIndex);
     }
 
-    /**
-     * 판매 슬롯 클릭
-     */
-    private void handleSellSlotClick(Player player, GamePlayer gamePlayer, InventoryClickEvent event) {
-        event.setCancelled(true);
-
-        // 선택된 유닛 판매
-        Unit unitToSell = guiManager.getSelectedUnitForSale(player.getUniqueId());
-
-        if (unitToSell != null) {
-            int goldGained = gamePlayer.sellUnit(unitToSell);
-            player.sendMessage("§a유닛을 판매했습니다! §6+" + goldGained + "G");
-
-            // 선택 해제
-            guiManager.clearSelectedUnitForSale(player.getUniqueId());
-
-            // 인벤토리 새로고침
-            guiManager.setupGameInventory(player, gamePlayer);
-        } else {
-            player.sendMessage("§c먼저 벤치 유닛을 우클릭하여 선택하세요!");
-        }
-    }
-
-    /**
-     * 배치판 GUI 클릭
-     */
-    private void handleBoardGUIClick(Player player, GamePlayer gamePlayer, InventoryClickEvent event) {
-        event.setCancelled(true);
-
-        int slot = event.getSlot();
-
-        // 8번째 열(구분선)은 클릭 무시
-        if (slot % 9 == 8) return;
-
-        // 48칸 이상은 무시
-        int row = slot / 9;
-        int col = slot % 9;
-        if (row >= 6 || col >= 8) return;
-
-        Position position = new Position(col, row);
-        Unit unitAtPos = gamePlayer.getBoard().get(position);
-
-        ItemStack cursor = event.getCursor();
-
-        // 커서에 유닛이 있으면 배치
-        if (cursor != null && cursor.getType() != Material.AIR &&
-            NBTUtils.isUnitItem(cursor, plugin.getKey())) {
-
-            UUID unitInstanceId = NBTUtils.getUnitInstanceId(cursor, plugin.getKey());
-
-            // 벤치에서 유닛 찾기
-            Unit unitToPlace = null;
-            for (Unit unit : gamePlayer.getBench()) {
-                if (unit.getInstanceId().equals(unitInstanceId)) {
-                    unitToPlace = unit;
-                    break;
-                }
-            }
-
-            if (unitToPlace != null) {
-                // 해당 위치가 비어있는지 확인
-                if (unitAtPos == null) {
-                    // 벤치에서 제거하고 보드에 배치
-                    gamePlayer.getBench().remove(unitToPlace);
-                    gamePlayer.placeUnit(unitToPlace, position);
-
-                    player.sendMessage("§a유닛을 배치했습니다!");
-
-                    // 커서 클리어
-                    event.setCursor(null);
-
-                    // GUI 새로고침
-                    guiManager.openBoardGUI(player, gamePlayer);
-                    guiManager.setupGameInventory(player, gamePlayer);
-                } else {
-                    player.sendMessage("§c해당 위치에 이미 유닛이 있습니다!");
-                }
-            }
-        }
-
-        // 보드의 유닛 클릭 - 벤치로 이동
-        else if (unitAtPos != null) {
-            if (gamePlayer.addUnitToBench(unitAtPos)) {
-                gamePlayer.removeUnitFromBoard(position);
-                player.sendMessage("§a유닛을 벤치로 이동했습니다!");
-
-                // GUI 새로고침
-                guiManager.openBoardGUI(player, gamePlayer);
-                guiManager.setupGameInventory(player, gamePlayer);
-            } else {
-                player.sendMessage("§c벤치가 가득 찼습니다!");
-            }
-        }
-    }
 
     /**
      * 관전 목록 클릭
@@ -313,6 +354,13 @@ public class InventoryGUIListener implements Listener {
         if (meta.getOwningPlayer() == null) return;
 
         UUID targetId = meta.getOwningPlayer().getUniqueId();
+
+        // 🚨 핵심 해결책: 인벤토리를 닫거나 다른 GUI를 열기 전에 커서의 아이템을 비운다.
+        // 현재 커서에 관전 플레이어 목록 아이콘이 들려있을 수 있다.
+        if (event.getCursor() != null && event.getCursor().getType() != Material.AIR) {
+            event.setCursor(new ItemStack(Material.AIR));
+        }
+
         player.closeInventory();
 
         guiManager.startSpectating(player, targetId);
@@ -323,9 +371,9 @@ public class InventoryGUIListener implements Listener {
      */
     @EventHandler
     public void onInventoryDrag(InventoryDragEvent event) {
-        // 배치판이나 플레이어 목록 GUI에서는 드래그 금지
+        // 54칸 통합 GUI와 플레이어 목록 GUI에서는 드래그 금지
         String title = event.getView().getTitle();
-        if (title.contains("배치판") || title.contains("플레이어 목록")) {
+        if (title.contains("마토체스") || title.contains("플레이어 목록")) {
             event.setCancelled(true);
         }
     }

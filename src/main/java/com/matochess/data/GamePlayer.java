@@ -1,6 +1,8 @@
 package com.matochess.data;
 
 import com.matochess.data.Position;
+import lombok.Getter;
+import lombok.Setter;
 import org.bukkit.entity.Player;
 
 import java.util.*;
@@ -9,10 +11,16 @@ import java.util.*;
  * Represents a player in an active game
  * Tracks their resources, units, level, and game state
  */
+@Getter @Setter
 public class GamePlayer {
 
+    // Getters and setters
     private final UUID playerId;
+
     private final Player player;
+    // 🚨 새 Getter
+    @Getter
+    private final UUID gameId; // 🚨 새 필드: 소속된 게임 ID
 
     // Resources
     private int gold;
@@ -38,9 +46,10 @@ public class GamePlayer {
     private static final int BOARD_WIDTH = 8;
     private static final int BOARD_HEIGHT = 3; // 플레이어는 8*3 영역에만 배치 가능
 
-    public GamePlayer(Player player, int startingGold, int startingLevel, int startingHealth) {
+    public GamePlayer(Player player, UUID gameId, int startingGold, int startingLevel, int startingHealth) {
         this.playerId = player.getUniqueId();
         this.player = player;
+        this.gameId = gameId; // 🚨 gameId 저장
         this.gold = startingGold;
         this.experience = 0;
         this.level = startingLevel;
@@ -135,8 +144,8 @@ public class GamePlayer {
         }
         bench.add(unit);
 
-        // 자동 합성 체크
-        autoUpgradeUnits();
+        // 자동 합성은 준비 단계에서만 수동으로 호출됨
+        // autoUpgradeUnits();
 
         return true;
     }
@@ -199,14 +208,21 @@ public class GamePlayer {
     }
 
     /**
-     * Check for units that can be combined and auto-upgrade
+     * Check for units that can be combined and auto-upgrade (벤치 + 보드의 모든 유닛 포함)
+     * 준비 단계에서만 호출되어야 함
      * @return number of units upgraded
      */
     public int autoUpgradeUnits() {
         Map<String, List<Unit>> unitsByIdAndLevel = new HashMap<>();
 
-        // Group units by id and level
+        // 벤치의 모든 유닛을 그룹화
         for (Unit unit : bench) {
+            String key = unit.getId() + "_" + unit.getLevel().getLevel();
+            unitsByIdAndLevel.computeIfAbsent(key, k -> new ArrayList<>()).add(unit);
+        }
+
+        // 보드의 모든 유닛도 그룹화 (전장에 나가있는 병력 포함)
+        for (Unit unit : board.values()) {
             String key = unit.getId() + "_" + unit.getLevel().getLevel();
             unitsByIdAndLevel.computeIfAbsent(key, k -> new ArrayList<>()).add(unit);
         }
@@ -225,9 +241,15 @@ public class GamePlayer {
                 allEquipment.addAll(second.removeAllEquipment());
                 allEquipment.addAll(third.removeAllEquipment());
 
-                // Remove from bench
+                // 벤치와 보드에서 제거
                 bench.remove(second);
                 bench.remove(third);
+
+                // 보드에서도 제거
+                Position secondPos = findUnitPosition(second);
+                Position thirdPos = findUnitPosition(third);
+                if (secondPos != null) board.remove(secondPos);
+                if (thirdPos != null) board.remove(thirdPos);
 
                 // Upgrade base unit
                 if (base.upgrade()) {
@@ -250,6 +272,18 @@ public class GamePlayer {
         }
 
         return upgraded;
+    }
+
+    /**
+     * 유닛의 보드상 위치 찾기
+     */
+    private Position findUnitPosition(Unit unit) {
+        for (Map.Entry<Position, Unit> entry : board.entrySet()) {
+            if (entry.getValue().equals(unit)) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     /**
@@ -318,9 +352,12 @@ public class GamePlayer {
         return sellPrice;
     }
 
-    // Getters and setters
     public UUID getPlayerId() {
         return playerId;
+    }
+
+    public UUID getGameId() {
+        return gameId;
     }
 
     public Player getPlayer() {

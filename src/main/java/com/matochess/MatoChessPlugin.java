@@ -8,6 +8,7 @@ import com.matochess.commands.ShopCommand;
 import com.matochess.commands.StatsCommand;
 import com.matochess.core.EquipmentRegistry;
 import com.matochess.core.MonsterRegistry;
+import com.matochess.core.SynergyManager;
 import com.matochess.core.UnitRegistry;
 import com.matochess.data.SQLiteDataManager;
 import com.matochess.game.GameManager;
@@ -40,6 +41,7 @@ public class MatoChessPlugin extends JavaPlugin {
     private UnitRegistry unitRegistry;
     private EquipmentRegistry equipmentRegistry;
     private MonsterRegistry monsterRegistry;
+    private SynergyManager synergyManager;
     private SQLiteDataManager dataManager;
     private GameManager gameManager;
     private GUIManager guiManager;
@@ -132,6 +134,10 @@ public class MatoChessPlugin extends JavaPlugin {
             // Monster registry
             this.monsterRegistry = new MonsterRegistry();
             getLogger().info("Registered PVE monster waves");
+
+            // Synergy manager
+            this.synergyManager = new SynergyManager();
+            getLogger().info("SynergyManager initialized");
 
             // SQLite data manager
             this.dataManager = new SQLiteDataManager(this);
@@ -226,6 +232,10 @@ public class MatoChessPlugin extends JavaPlugin {
 
     public MonsterRegistry getMonsterRegistry() {
         return monsterRegistry;
+    }
+
+    public SynergyManager getSynergyManager() {
+        return synergyManager;
     }
 
     public SQLiteDataManager getDataManager() {

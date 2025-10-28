@@ -26,13 +26,31 @@ public class CombatManager {
      */
     public void startPVPCombat(GamePlayer player1, GamePlayer player2) {
         UUID combatId = UUID.randomUUID();
-        CombatInstance combat = new CombatInstance(plugin, combatId, player1, player2);
 
+        // 🚨 핵심 1: 전투가 벌어질 아레나를 결정합니다. (여기서는 player1의 아레나를 사용)
+        UUID gameId = player1.getGameId(); // GamePlayer에 getGameId()가 있다고 가정합니다.
+        if (gameId == null) {
+            plugin.getLogger().severe("Player1 has no active game ID!");
+            return;
+        }
+
+        // GameManager에서 GameInstance를 가져와 player1의 아레나를 얻습니다.
+        var gameInstance = plugin.getGameManager().getGame(gameId); // GameManager에 getGame()이 있다고 가정합니다.
+        if (gameInstance == null) return;
+
+        var combatArena = gameInstance.getPlayerArena(player1.getPlayerId());
+        if (combatArena == null) {
+            plugin.getLogger().severe("Could not find arena for player1!");
+            return;
+        }
+
+        // CombatInstance에 아레나 정보를 전달합니다. (CombatInstance 생성자 수정 필요)
+        CombatInstance combat = new CombatInstance(plugin, combatId, player1, player2, combatArena);
         activeCombats.put(combatId, combat);
         combat.start();
 
         plugin.getLogger().info("Started PVP combat: " + player1.getPlayer().getName() +
-                               " vs " + player2.getPlayer().getName());
+                " vs " + player2.getPlayer().getName() + " at Arena " + combatArena.getId());
     }
 
     /**
@@ -40,8 +58,24 @@ public class CombatManager {
      */
     public void startPVECombat(GamePlayer player, int round) {
         UUID combatId = UUID.randomUUID();
-        CombatInstance combat = new CombatInstance(plugin, combatId, player, round);
 
+        // 🚨 핵심 2: PVE도 player의 아레나를 전투 장소로 지정합니다.
+        UUID gameId = player.getGameId();
+        if (gameId == null) {
+            plugin.getLogger().severe("Player has no active game ID!");
+            return;
+        }
+
+        var gameInstance = plugin.getGameManager().getGame(gameId);
+        if (gameInstance == null) return;
+
+        var combatArena = gameInstance.getPlayerArena(player.getPlayerId());
+        if (combatArena == null) {
+            plugin.getLogger().severe("Could not find arena for PVE player!");
+            return;
+        }
+
+        CombatInstance combat = new CombatInstance(plugin, combatId, player, round, combatArena);
         activeCombats.put(combatId, combat);
         combat.start();
 
