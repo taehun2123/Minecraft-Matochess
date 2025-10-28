@@ -35,6 +35,10 @@ public enum GamePhase {
     public boolean isCombat() {
         return this == COMBAT_PVP || this == COMBAT_PVE;
     }
+    public boolean isPVPCombat() {
+        return this == COMBAT_PVP;
+    }
+
 
     public boolean isPreparation() {
         return this == PREPARATION;

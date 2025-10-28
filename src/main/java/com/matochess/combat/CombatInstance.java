@@ -9,7 +9,9 @@ import com.matochess.data.Unit;
 import com.matochess.game.BoardManager;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.attribute.Attribute;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Mob;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
@@ -113,8 +115,8 @@ public class CombatInstance {
     }
 
     /**
-     * 🚨 새 메서드: 플레이어를 전투 아레나의 관전 위치로 텔레포트합니다.
-     * (이 로직은 GameInstance의 teleportToArenaView 로직을 재사용해야 합니다.)
+     * 플레이어를 전투 아레나로 텔레포트
+     * 보드판 위에 평범하게 스폰 (걸어다닐 수 있음)
      */
     private void teleportPlayersToCombatArena() {
         // player1 텔레포트
@@ -133,25 +135,24 @@ public class CombatInstance {
         Location pos1 = combatArena.getPos1();
         Location pos2 = combatArena.getPos2();
 
-        // 8x6 보드판의 중심 좌표 계산 (GameInstance의 로직 재사용)
+        // 32x24 보드판의 중심 좌표 계산
         double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
         double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
         double boardY = Math.min(pos1.getY(), pos2.getY());
 
-        // 카메라 위치: 보드판 중심 위쪽
-        double cameraY = boardY + 8; // 8블록 위
-        double cameraZ = centerZ + 5; // 보드 뒤쪽으로 5블록
+        // 보드판 위에 스폰 (보드판 표면 + 1블록)
+        Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
 
-        Location cameraPos = new Location(pos1.getWorld(), centerX, cameraY, cameraZ);
+        // Adventure 모드로 설정 및 이동 가능하도록 설정
+        player.setGameMode(org.bukkit.GameMode.ADVENTURE);
+        player.setWalkSpeed(0.2f); // 기본 걷기 속도
+        player.setFlySpeed(0.1f); // 기본 날기 속도
+        player.setAllowFlight(false);
+        player.setFlying(false);
 
-        // 시점 유지를 위해 플레이어의 현재 시점을 재사용 (이전 답변에서 수정했던 로직)
-        float currentYaw = player.getLocation().getYaw();
-        float currentPitch = player.getLocation().getPitch();
-
-        Location teleportLoc = new Location(cameraPos.getWorld(), cameraPos.getX(), cameraPos.getY(), cameraPos.getZ(), currentYaw, currentPitch);
-
-        player.teleport(teleportLoc);
-        plugin.getLogger().info("Player " + player.getName() + " teleported to combat arena view.");
+        player.teleport(spawnPos);
+        plugin.getLogger().info("Player " + player.getName() + " teleported to combat arena at " +
+                               String.format("%.1f, %.1f, %.1f", centerX, boardY + 1, centerZ));
     }
 
     /**
@@ -201,7 +202,7 @@ public class CombatInstance {
                 }
             });
         } else {
-            // TODO: Spawn PVE monsters
+            // Spawn PVE monsters
             spawnPVEMonsters();
         }
     }
@@ -456,7 +457,7 @@ public class CombatInstance {
     }
 
     /**
-     * Perform action for a single entity
+     * Perform action for a single entity (AI 기반 자연스러운 움직임)
      */
     private void performEntityAction(LivingEntity attacker, Map<UUID, LivingEntity> enemies) {
         Unit attackerUnit = entityToUnit.get(attacker);
@@ -475,11 +476,62 @@ public class CombatInstance {
             return;
         }
 
-        double distance = attacker.getLocation().distance(target.getLocation());
-        double attackRange = 2.0; // Default attack range
+        // AI 기반 타겟 설정 (Mob 엔티티만 해당)
+        if (attacker instanceof Mob) {
+            Mob mob = (Mob) attacker;
 
+            // 중요: 현재 타겟이 적 팀인지 확인
+            LivingEntity currentTarget = mob.getTarget();
+            if (currentTarget != null) {
+                // 같은 팀을 공격하고 있다면 타겟 해제
+                boolean attackerIsTeam1 = team1Entities.containsValue(attacker);
+                boolean targetIsTeam1 = team1Entities.containsValue(currentTarget);
+
+                if (attackerIsTeam1 == targetIsTeam1) {
+                    // 같은 팀이면 타겟 해제
+                    mob.setTarget(null);
+                }
+            }
+
+            // 적 팀의 타겟 설정
+            mob.setTarget(target);
+
+            // 이동 속도 설정 (attackSpeed 기반, 최소 속도 보장)
+            double speedMultiplier = Math.min(attackerUnit.getAttackSpeed() / 100.0, 2.0); // 최대 2배속
+            speedMultiplier = Math.max(speedMultiplier, 0.5); // 최소 0.5배속 보장
+            if (attacker.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED) != null) {
+                double baseSpeed = 0.3; // 기본 이동 속도 (바닐라보다 약간 빠름)
+                attacker.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED).setBaseValue(baseSpeed * speedMultiplier);
+            }
+        }
+
+        double distance = attacker.getLocation().distance(target.getLocation());
+
+        // 원거리 유닛 확인 (스켈레톤, 드라운드 등)
+        boolean isRangedUnit = attacker instanceof org.bukkit.entity.Skeleton ||
+                               attacker instanceof org.bukkit.entity.Drowned ||
+                               attacker instanceof org.bukkit.entity.Witch ||
+                               attacker instanceof org.bukkit.entity.Pillager ||
+                               attacker instanceof org.bukkit.entity.Blaze;
+
+        // 공격 범위 설정 (원거리는 더 넓음)
+        double attackRange = isRangedUnit ? 15.0 : 3.0;
+
+        // 공격 범위 내에 있으면 공격
         if (distance <= attackRange) {
-            // Attack
+            // 크리퍼 특수 처리: 폭발 공격 (광역 데미지, 자신은 체력 소모 없음)
+            if (attacker instanceof org.bukkit.entity.Creeper) {
+                handleCreeperExplosion(attacker, attackerUnit, enemies);
+                return;
+            }
+
+            // 원거리 유닛 처리: 커스텀 발사체 이펙트
+            if (isRangedUnit) {
+                handleRangedAttack(attacker, attackerUnit, target, targetUnit);
+                return;
+            }
+
+            // 근접 Attack
             double damage = plugin.getCombatManager().calculateDamage(attackerUnit, targetUnit);
 
             // Check for critical hit
@@ -509,8 +561,9 @@ public class CombatInstance {
             } else {
                 target.setHealth(newHealth);
 
-                // 체력바 업데이트
-                boardManager.updateHealthBar(target, targetUnit);
+                // 체력바 업데이트 (팀 색상 유지)
+                boolean isBlueTeam = team1Entities.containsValue(target);
+                boardManager.updateHealthBar(target, targetUnit, isBlueTeam);
 
                 // Damage particles
                 target.getWorld().spawnParticle(org.bukkit.Particle.DAMAGE_INDICATOR,
@@ -535,8 +588,9 @@ public class CombatInstance {
                 double newAttackerHealth = Math.min(attacker.getHealth() + heal, attacker.getMaxHealth());
                 attacker.setHealth(newAttackerHealth);
 
-                // 체력바 업데이트
-                boardManager.updateHealthBar(attacker, attackerUnit);
+                // 체력바 업데이트 (팀 색상 유지)
+                boolean isBlueTeam = team1Entities.containsValue(attacker);
+                boardManager.updateHealthBar(attacker, attackerUnit, isBlueTeam);
 
                 // Heal particles
                 if (heal > 0) {
@@ -546,17 +600,8 @@ public class CombatInstance {
                         org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 0.3f, 2.0f);
                 }
             }
-        } else {
-            // Move towards target
-            Location attackerLoc = attacker.getLocation();
-            Location targetLoc = target.getLocation();
-
-            org.bukkit.util.Vector direction = targetLoc.toVector().subtract(attackerLoc.toVector()).normalize();
-            double moveSpeed = 0.3; // Movement speed per tick
-            Location newLoc = attackerLoc.add(direction.multiply(moveSpeed));
-
-            attacker.teleport(newLoc);
         }
+        // AI가 자동으로 타겟을 향해 이동하므로 별도의 이동 로직 불필요
     }
 
     /**
@@ -652,6 +697,164 @@ public class CombatInstance {
     }
 
     /**
+     * 원거리 공격 처리 (커스텀 발사체 이펙트, 유닛 스탯 기반 데미지)
+     */
+    private void handleRangedAttack(LivingEntity attacker, Unit attackerUnit, LivingEntity target, Unit targetUnit) {
+        // 유닛 스탯 기반 데미지 계산
+        double damage = plugin.getCombatManager().calculateDamage(attackerUnit, targetUnit);
+
+        // 크리티컬 체크
+        if (plugin.getCombatManager().isCriticalHit(attackerUnit, attackerUnit.getCriticalChance() / 100.0)) {
+            damage *= (1.0 + attackerUnit.getCriticalDamage() / 100.0);
+            target.getWorld().spawnParticle(org.bukkit.Particle.CRIT, target.getLocation().add(0, 1, 0), 5);
+            target.getWorld().playSound(target.getLocation(),
+                org.bukkit.Sound.ENTITY_PLAYER_ATTACK_CRIT, 0.7f, 1.2f);
+        }
+
+        // 커스텀 발사체 이펙트 (파티클로 시각화)
+        Location startLoc = attacker.getEyeLocation();
+        Location endLoc = target.getEyeLocation();
+
+        // 발사체 타입에 따라 다른 파티클
+        org.bukkit.Particle particleType;
+        if (attacker instanceof org.bukkit.entity.Skeleton) {
+            particleType = org.bukkit.Particle.CRIT; // 화살 이펙트
+        } else if (attacker instanceof org.bukkit.entity.Drowned) {
+            particleType = org.bukkit.Particle.WATER_SPLASH; // 삼지창 이펙트
+        } else if (attacker instanceof org.bukkit.entity.Blaze) {
+            particleType = org.bukkit.Particle.FLAME; // 불 이펙트
+        } else {
+            particleType = org.bukkit.Particle.SPELL_WITCH; // 기본 마법 이펙트
+        }
+
+        // 발사체 경로 파티클 생성
+        org.bukkit.util.Vector direction = endLoc.toVector().subtract(startLoc.toVector()).normalize();
+        double distance = startLoc.distance(endLoc);
+        for (double d = 0; d < distance; d += 0.5) {
+            Location particleLoc = startLoc.clone().add(direction.clone().multiply(d));
+            attacker.getWorld().spawnParticle(particleType, particleLoc, 1, 0, 0, 0, 0);
+        }
+
+        // 발사 사운드
+        if (attacker instanceof org.bukkit.entity.Skeleton) {
+            attacker.getWorld().playSound(attacker.getLocation(),
+                org.bukkit.Sound.ENTITY_ARROW_SHOOT, 0.8f, 1.0f);
+        } else if (attacker instanceof org.bukkit.entity.Drowned) {
+            attacker.getWorld().playSound(attacker.getLocation(),
+                org.bukkit.Sound.ITEM_TRIDENT_THROW, 0.8f, 1.0f);
+        } else if (attacker instanceof org.bukkit.entity.Blaze) {
+            attacker.getWorld().playSound(attacker.getLocation(),
+                org.bukkit.Sound.ENTITY_BLAZE_SHOOT, 0.8f, 1.0f);
+        }
+
+        // 데미지 적용
+        double newHealth = target.getHealth() - damage;
+        if (newHealth <= 0) {
+            target.setHealth(0);
+
+            // 사망 이펙트
+            target.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_NORMAL,
+                target.getLocation().add(0, 1, 0), 20, 0.3, 0.3, 0.3, 0.05);
+            target.getWorld().spawnParticle(org.bukkit.Particle.SMOKE_LARGE,
+                target.getLocation().add(0, 1, 0), 10, 0.2, 0.2, 0.2, 0.05);
+
+            // 사망 사운드
+            target.getWorld().playSound(target.getLocation(),
+                org.bukkit.Sound.ENTITY_GENERIC_DEATH, 0.8f, 0.9f);
+
+            target.remove();
+        } else {
+            target.setHealth(newHealth);
+
+            // 체력바 업데이트
+            boolean isBlueTeam = team1Entities.containsValue(target);
+            boardManager.updateHealthBar(target, targetUnit, isBlueTeam);
+
+            // 데미지 이펙트
+            target.getWorld().spawnParticle(org.bukkit.Particle.DAMAGE_INDICATOR,
+                target.getLocation().add(0, 1.5, 0), 3, 0.2, 0.2, 0.2, 0);
+
+            // 피격 사운드
+            target.getWorld().playSound(target.getLocation(),
+                org.bukkit.Sound.ENTITY_PLAYER_HURT, 0.4f, 1.0f);
+        }
+
+        // 공격 이펙트
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.SWEEP_ATTACK,
+            attacker.getLocation().add(0, 1, 0), 1, 0.3, 0.3, 0.3, 0);
+    }
+
+    /**
+     * 크리퍼 폭발 처리 (광역 데미지, 자신은 체력 소모 없음)
+     */
+    private void handleCreeperExplosion(LivingEntity creeper, Unit creeperUnit, Map<UUID, LivingEntity> enemies) {
+        Location explosionLoc = creeper.getLocation();
+        double explosionRadius = 5.0; // 폭발 반경 (약 1.25칸)
+
+        // 폭발 이펙트
+        creeper.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_LARGE,
+            explosionLoc.clone().add(0, 1, 0), 3, 0.5, 0.5, 0.5, 0);
+        creeper.getWorld().spawnParticle(org.bukkit.Particle.SMOKE_LARGE,
+            explosionLoc.clone().add(0, 1, 0), 30, 1.0, 1.0, 1.0, 0.1);
+        creeper.getWorld().spawnParticle(org.bukkit.Particle.FLAME,
+            explosionLoc.clone().add(0, 1, 0), 20, 0.8, 0.8, 0.8, 0.05);
+
+        // 폭발 사운드
+        creeper.getWorld().playSound(explosionLoc,
+            org.bukkit.Sound.ENTITY_GENERIC_EXPLODE, 2.0f, 1.0f);
+
+        // 광역 데미지 (반경 내 모든 적에게)
+        for (LivingEntity enemy : enemies.values()) {
+            if (enemy == null || enemy.isDead()) continue;
+
+            double distance = enemy.getLocation().distance(explosionLoc);
+            if (distance <= explosionRadius) {
+                Unit enemyUnit = entityToUnit.get(enemy);
+                if (enemyUnit == null) continue;
+
+                // 거리 기반 데미지 감소 (가까울수록 더 강함)
+                double damageMultiplier = 1.0 - (distance / explosionRadius * 0.5); // 50%~100% 데미지
+                double damage = plugin.getCombatManager().calculateDamage(creeperUnit, enemyUnit) * damageMultiplier;
+
+                // 크리티컬 체크
+                if (plugin.getCombatManager().isCriticalHit(creeperUnit, creeperUnit.getCriticalChance() / 100.0)) {
+                    damage *= (1.0 + creeperUnit.getCriticalDamage() / 100.0);
+                    enemy.getWorld().spawnParticle(org.bukkit.Particle.CRIT, enemy.getLocation().add(0, 1, 0), 5);
+                }
+
+                // 데미지 적용
+                double newHealth = enemy.getHealth() - damage;
+                if (newHealth <= 0) {
+                    enemy.setHealth(0);
+
+                    // 사망 이펙트
+                    enemy.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_NORMAL,
+                        enemy.getLocation().add(0, 1, 0), 20, 0.3, 0.3, 0.3, 0.05);
+                    enemy.getWorld().playSound(enemy.getLocation(),
+                        org.bukkit.Sound.ENTITY_GENERIC_DEATH, 0.8f, 0.9f);
+
+                    enemy.remove();
+                } else {
+                    enemy.setHealth(newHealth);
+
+                    // 체력바 업데이트
+                    boolean isBlueTeam = team1Entities.containsValue(enemy);
+                    boardManager.updateHealthBar(enemy, enemyUnit, isBlueTeam);
+
+                    // 데미지 이펙트
+                    enemy.getWorld().spawnParticle(org.bukkit.Particle.DAMAGE_INDICATOR,
+                        enemy.getLocation().add(0, 1.5, 0), 3, 0.2, 0.2, 0.2, 0);
+                    enemy.getWorld().playSound(enemy.getLocation(),
+                        org.bukkit.Sound.ENTITY_PLAYER_HURT, 0.4f, 1.0f);
+                }
+            }
+        }
+
+        // 크리퍼는 체력 소모 없이 쿨다운만 적용 (다음 공격까지 대기)
+        // AI가 자동으로 다시 타겟을 향해 이동하고 폭발 반복
+    }
+
+    /**
      * Calculate damage based on surviving units
      */
     private int calculateDamage() {
@@ -700,5 +903,9 @@ public class CombatInstance {
 
     public boolean isFinished() {
         return isFinished;
+    }
+
+    public Arena getCombatArena() {
+        return combatArena;
     }
 }

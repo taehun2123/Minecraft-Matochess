@@ -312,6 +312,14 @@ public class GamePlayer {
     }
 
     /**
+     * Get lose streak bonus gold (max 5)
+     * 연패 시에도 골드를 지급하여 약한 플레이어에게 기회 제공
+     */
+    public int getLoseStreakBonus() {
+        return Math.min(loseStreak, 5);
+    }
+
+    /**
      * Sell a unit from bench and get gold refund
      * Equipment is returned to storage
      * @return gold refunded, or 0 if unit not found

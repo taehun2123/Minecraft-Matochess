@@ -6,6 +6,7 @@ import com.matochess.data.Unit;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -99,6 +100,25 @@ public class CombatManager {
     public CombatInstance getCombat(UUID combatId) {
         return activeCombats.get(combatId);
     }
+
+    // =========================================================
+    // 🚨 스코어보드 색상 결정을 위해 추가된 메서드
+    // =========================================================
+
+    /**
+     * 특정 플레이어가 현재 참여하고 있는 CombatInstance를 찾아 반환합니다.
+     * GameInstance에서 스코어보드 색상을 동적으로 결정하는 데 사용됩니다.
+     */
+    public CombatInstance getCombatByPlayer(UUID playerId) {
+        Optional<CombatInstance> combat = activeCombats.values().stream()
+                .filter(c -> c.getPlayer1().getPlayerId().equals(playerId) ||
+                        (c.getPlayer2() != null && c.getPlayer2().getPlayerId().equals(playerId)))
+                .findFirst();
+
+        return combat.orElse(null);
+    }
+
+    // =========================================================
 
     /**
      * Calculate damage for a unit attack

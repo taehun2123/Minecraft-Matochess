@@ -7,6 +7,7 @@ import com.matochess.data.Unit;
 import com.matochess.game.ShopManager;
 import com.matochess.utils.NBTUtils;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
@@ -18,7 +19,6 @@ import java.util.*;
 
 /**
  * 새로운 인벤토리 기반 GUI 시스템
- * E키로 열리는 통합 배치/상점 인벤토리
  */
 public class InventoryGUIManager {
 
@@ -251,8 +251,20 @@ public class InventoryGUIManager {
         synergyMeta.setDisplayName("§d§l시너지 정보");
         List<String> synergyLore = new ArrayList<>();
         synergyLore.add("§7현재 활성화된 시너지:");
-        // TODO: 시너지 계산 및 표시
-        synergyLore.add("§8(구현 예정)");
+
+        // 시너지 계산 및 표시
+        List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
+        Map<com.matochess.data.UnitTrait, com.matochess.core.SynergyManager.ActiveSynergy> activeSynergies =
+            plugin.getSynergyManager().calculateSynergies(boardUnits);
+
+        if (activeSynergies.isEmpty()) {
+            synergyLore.add("§8활성화된 시너지가 없습니다");
+        } else {
+            for (com.matochess.core.SynergyManager.ActiveSynergy synergy : activeSynergies.values()) {
+                synergyLore.add("§a✓ " + synergy.getDisplayString());
+            }
+        }
+
         synergyMeta.setLore(synergyLore);
         synergyInfo.setItemMeta(synergyMeta);
         gui.setItem(INFO_SYNERGY_SLOT, synergyInfo);
@@ -264,7 +276,18 @@ public class InventoryGUIManager {
         List<String> resourceLore = new ArrayList<>();
         resourceLore.add("§7보유 골드: §6" + gamePlayer.getGold() + "G");
         resourceLore.add("§7현재 레벨: §e" + gamePlayer.getLevel());
-        resourceLore.add("§7현재 경험치: §a" + gamePlayer.getExperience() + " XP");
+
+        // 최대 경험치 계산 및 표시
+        int currentLevel = gamePlayer.getLevel();
+        int currentXP = gamePlayer.getExperience();
+
+        if (currentLevel < 8) {
+            int maxXP = plugin.getConfig().getInt("game.xp-required." + currentLevel, currentLevel * 2);
+            resourceLore.add("§7경험치: §a" + currentXP + " §7/ §a" + maxXP + " XP");
+        } else {
+            resourceLore.add("§7경험치: §a§lMAX LEVEL");
+        }
+
         resourceMeta.setLore(resourceLore);
         resourceInfo.setItemMeta(resourceMeta);
         gui.setItem(INFO_RESOURCES_SLOT, resourceInfo);
@@ -281,7 +304,19 @@ public class InventoryGUIManager {
 
         List<String> lore = new ArrayList<>();
         lore.add("§7현재 레벨: §e" + gamePlayer.getLevel());
-        lore.add("§7경험치: §a" + gamePlayer.getExperience() + " §7/ §a?"); // TODO: 최대 경험치
+        lore.add("§7현재 경험치: §a" + gamePlayer.getExperience());
+        // 레벨별 필요 경험치
+        int[] xpRequired = new int[9];
+        for (int i = 1; i <= 8; i++) {
+            xpRequired[i] = plugin.getConfig().getInt("game.xp-required." + i, i * 2);
+        }
+
+        if (gamePlayer.getLevel() < 8) {
+            int requiredXP = xpRequired[gamePlayer.getLevel()];
+            lore.add("§7필요 경험치: §a" + requiredXP + " XP");
+        } else {
+            lore.add("§6§l최대 레벨!");
+        }
         lore.add("");
 
         int xpCost = plugin.getConfig().getInt("game.xp-cost-gold", 4);
@@ -532,15 +567,24 @@ public class InventoryGUIManager {
         // 상점에서 제거
         shopUnits.set(shopIndex, null);
 
+        // 자동 합성 체크 (준비 단계에서만)
+        var game = plugin.getGameManager().getPlayerGame(playerId);
+        if (game != null && !game.getCurrentPhase().isCombat()) {
+            int upgraded = gamePlayer.autoUpgradeUnits();
+            if (upgraded > 0) {
+                player.sendMessage("§a§l✦ " + upgraded + "개 유닛이 자동 합성되었습니다!");
+                player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
+            }
+        }
+
         player.sendMessage("§a유닛을 구매했습니다! §7(" + unit.getName() + " - §6" + unit.getCost() + "G§7)");
 
         // 인벤토리 새로고침
         setupGameInventory(player, gamePlayer);
 
         // 스코어보드 업데이트
-        var game = plugin.getGameManager().getPlayerGame(playerId);
         if (game != null) {
-            game.updateAllScoreboards();
+            game.updateGameDisplays();
         }
 
         return true;
@@ -592,9 +636,25 @@ public class InventoryGUIManager {
 
         Player target = Bukkit.getPlayer(targetId);
         if (target != null) {
-            // 타겟 위치로 텔레포트
-            spectator.teleport(target.getLocation());
-            spectator.sendMessage("§a" + target.getName() + "의 배치판을 보고 있습니다.");
+            // 타겟의 아레나로 텔레포트 (보드판 중앙)
+            var game = plugin.getGameManager().getPlayerGame(targetId);
+            if (game != null) {
+                var arena = game.getPlayerArena(targetId);
+                if (arena != null) {
+                    Location pos1 = arena.getPos1();
+                    Location pos2 = arena.getPos2();
+
+                    // 보드판 중심 좌표 계산
+                    double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
+                    double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
+                    double boardY = Math.min(pos1.getY(), pos2.getY());
+
+                    // 보드판 위에 스폰 (보드판 표면 + 1블록)
+                    Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
+                    spectator.teleport(spawnPos);
+                    spectator.sendMessage("§a" + target.getName() + "의 배치판을 보고 있습니다.");
+                }
+            }
 
             // 핫바 9번 칸에 돌아가기 버튼 설정
             ItemStack returnButton = new ItemStack(Material.ARROW);
@@ -615,6 +675,22 @@ public class InventoryGUIManager {
         if (game != null) {
             var gamePlayer = game.getPlayer(player.getUniqueId());
             if (gamePlayer != null) {
+                // 자신의 아레나로 텔레포트 (보드판 중앙)
+                var arena = game.getPlayerArena(player.getUniqueId());
+                if (arena != null) {
+                    Location pos1 = arena.getPos1();
+                    Location pos2 = arena.getPos2();
+
+                    // 보드판 중심 좌표 계산
+                    double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
+                    double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
+                    double boardY = Math.min(pos1.getY(), pos2.getY());
+
+                    // 보드판 위에 스폰 (보드판 표면 + 1블록)
+                    Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
+                    player.teleport(spawnPos);
+                }
+
                 setupGameInventory(player, gamePlayer);
                 player.sendMessage("§a내 배치판으로 돌아왔습니다.");
             }

@@ -81,10 +81,11 @@ public class ArenaManager {
     }
 
     /**
-     * 기본 보드판 40개 생성 (잔디블럭 8x6)
+     * 기본 보드판 40개 생성 (잔디블럭 32x24 - 각 칸 4x4 블록)
+     * GUI의 각 칸(1칸)은 실제 월드에서 4x4 블록에 해당
      */
     private boolean generateDefaultArenas(World arenaWorld) {
-        plugin.getLogger().info("Generating 40 default grass boards (8x6)...");
+        plugin.getLogger().info("Generating 40 default grass boards (32x24 - 4x4 per cell)...");
 
         // 기존 아레나 초기화
         arenas.clear();
@@ -92,9 +93,12 @@ public class ArenaManager {
         int maxArenas = plugin.getConfig().getInt("arena.max-arenas", 40);
         int spacing = plugin.getConfig().getInt("arena.arena-spacing", 30);
 
-        int boardWidth = 8;
-        int boardLength = 6;
-        int columns = 8; // 한 줄에 8개
+        // 보드판 크기 (각 칸 = 4x4 블록)
+        // GUI 8칸 = 32블록 (각 칸 4x4)
+        // GUI 6칸 (3칸 × 2팀) = 24블록 (각 칸 4x4)
+        int boardWidth = 32;  // 8칸 × 4블록
+        int boardLength = 24; // 6칸 × 4블록 (Blue 3칸 + Red 3칸)
+        int columns = 4; // 한 줄에 4개 (보드판이 커졌으므로 줄여야 함)
         int startY = 100; // 하늘 높이
 
         for (int i = 0; i < maxArenas; i++) {
@@ -105,11 +109,22 @@ public class ArenaManager {
             int startX = col * (boardWidth + spacing);
             int startZ = row * (boardLength + spacing);
 
-            // 잔디블럭으로 8x6 보드판 생성
+            // 잔디블럭으로 32x24 보드판 생성
             for (int x = 0; x < boardWidth; x++) {
                 for (int z = 0; z < boardLength; z++) {
                     Block block = arenaWorld.getBlockAt(startX + x, startY, startZ + z);
-                    block.setType(Material.GRASS_BLOCK);
+
+                    // 2x2 패턴 구현
+                    // (x/2) + (z/2)의 합이 짝수면 흰색, 홀수면 검은색을 사용
+                    // 이렇게 하면 2x2 격자가 교차하는 패턴이 생성됩니다.
+
+                    if ( ((x / 2) + (z / 2)) % 2 == 0 ) {
+                        // 합이 짝수: 흰색 양털
+                        block.setType(Material.WHITE_WOOL);
+                    } else {
+                        // 합이 홀수: 검은색 양털
+                        block.setType(Material.BLACK_WOOL);
+                    }
                 }
             }
 
@@ -124,7 +139,7 @@ public class ArenaManager {
             }
         }
 
-        plugin.getLogger().info("All 40 default boards created successfully!");
+        plugin.getLogger().info("All 40 default boards (32x24) created successfully!");
         return true;
     }
 

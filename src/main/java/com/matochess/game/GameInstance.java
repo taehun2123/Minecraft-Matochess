@@ -1,6 +1,7 @@
 package com.matochess.game;
 
 import com.matochess.MatoChessPlugin;
+import com.matochess.combat.CombatInstance;
 import com.matochess.core.SynergyManager;
 import com.matochess.data.*;
 import org.bukkit.*;
@@ -40,6 +41,12 @@ public class GameInstance {
     // 스코어보드 (플레이어별)
     private final Map<UUID, Scoreboard> playerScoreboards;
 
+    // 현재 라운드 전투 매칭 정보 (플레이어 ID -> 상대 플레이어 ID)
+    private final Map<UUID, UUID> currentMatchups;
+
+    // 준비 단계 실시간 유닛 프리뷰 관리 (플레이어별)
+    private final Map<UUID, BoardManager> previewBoardManagers;
+
     // Configuration from config.yml
     private final int preparationTime;
     private final int combatTime;
@@ -57,6 +64,8 @@ public class GameInstance {
         this.players = new HashMap<>();
         this.playerArenas = new HashMap<>();
         this.playerScoreboards = new HashMap<>();
+        this.currentMatchups = new HashMap<>();
+        this.previewBoardManagers = new HashMap<>();
         this.currentPhase = GamePhase.WAITING;
         this.currentRound = 0;
 
@@ -97,6 +106,9 @@ public class GameInstance {
                 if (arena.isPresent()) {
                     playerArenas.put(playerId, arena.get());
                     plugin.getLogger().info("Player " + player.getName() + " assigned to arena " + arena.get().getId());
+
+                    // 실시간 프리뷰용 BoardManager 생성
+                    previewBoardManagers.put(playerId, new BoardManager(plugin));
                 } else {
                     plugin.getLogger().warning("No arena available for player " + player.getName());
                 }
@@ -149,8 +161,10 @@ public class GameInstance {
         for (GamePlayer gp : players.values()) {
             Player player = gp.getPlayer();
             if (player != null && player.isOnline()) {
-                // 관전자 모드로 설정
-                player.setGameMode(GameMode.SPECTATOR);
+                // Adventure 모드로 설정
+                player.setGameMode(GameMode.ADVENTURE);
+                player.setAllowFlight(false);
+                player.setFlying(false);
                 player.teleport(lobbyLoc);
                 player.sendMessage("§a게임 로비로 이동하였습니다!");
             }
@@ -171,21 +185,25 @@ public class GameInstance {
             if (gp.isAlive()) {
                 Player player = gp.getPlayer();
 
-                // 옵저버 모드로 설정
-                player.setGameMode(GameMode.SPECTATOR);
+                // 어드벤처 모드로 설정
+                player.setGameMode(GameMode.ADVENTURE);
+                player.setInvulnerable(true);
 
-                // 플레이어를 자신의 보드판으로 텔레포트 및 시점 고정
+                // 플레이어를 자신의 보드판으로 텔레포트
                 Arena arena = playerArenas.get(player.getUniqueId());
                 if (arena != null) {
                     teleportToArenaView(player, arena);
                 }
 
                 // 큰 글자로 안내 메시지 표시
-                player.sendTitle("§6§l준비 단계", "§eE키를 눌러 병력을 준비하세요!", 10, 60, 20);
+                player.sendTitle("§6§l준비 단계", "§e[ Shift + F ] 키를 눌러 병력을 준비하세요!", 10, 60, 20);
 
-                // Give gold
-                int gold = goldPerRound + gp.getWinStreakBonus();
-                gp.addGold(gold);
+                // Give gold (기본 + 연승 보너스 + 연패 보너스)
+                int baseGold = goldPerRound;
+                int winStreakGold = gp.getWinStreakBonus();
+                int loseStreakGold = gp.getLoseStreakBonus();
+                int totalGold = baseGold + winStreakGold + loseStreakGold;
+                gp.addGold(totalGold);
 
                 // Give XP
                 if (gp.addExperience(xpPerRound, xpRequired)) {
@@ -201,9 +219,19 @@ public class GameInstance {
                 // Send notification
                 player.sendMessage("§6=== 라운드 " + currentRound + " ===");
                 player.sendMessage("§e준비 단계: " + preparationTime + "초");
-                player.sendMessage("§6골드: +" + gold + " (총: " + gp.getGold() + ")");
+
+                // 골드 획득 상세 표시
+                StringBuilder goldMsg = new StringBuilder("§6골드: §f+" + baseGold);
+                if (winStreakGold > 0) {
+                    goldMsg.append(" §e+").append(winStreakGold).append("(연승)");
+                }
+                if (loseStreakGold > 0) {
+                    goldMsg.append(" §c+").append(loseStreakGold).append("(연패)");
+                }
+                goldMsg.append(" §7(총: §f").append(gp.getGold()).append("§7)");
+                player.sendMessage(goldMsg.toString());
                 player.sendMessage("");
-                player.sendMessage("§a§lE키를 눌러 인벤토리를 열고 배치/상점을 사용하세요!");
+                player.sendMessage("§a§l[ Shift + F ] 키를 눌러 배치/상점을 사용하세요!");
 
                 // 새 라운드 시작 시 상점 리셋 (새로운 유닛 풀 생성)
                 plugin.getInventoryGUIManager().resetPlayerShop(player.getUniqueId());
@@ -215,8 +243,8 @@ public class GameInstance {
 
         broadcast("&e라운드 " + currentRound + " - 준비 단계 (" + preparationTime + "초)");
 
-        // 모든 플레이어 스코어보드 업데이트
-        updateAllScoreboards();
+        // 모든 플레이어 스코어보드 업데이트 🚨 -> updateGameDisplays로 변경
+        updateGameDisplays();
 
         // 남은 시간 초기화 및 타이머 시작
         phaseTimeRemaining = preparationTime;
@@ -229,37 +257,33 @@ public class GameInstance {
     }
 
     /**
-     * 플레이어를 아레나 시점으로 텔레포트
-     * 8x6 보드판이 보이는 위치로 이동 (시점은 자유롭게)
+     * 플레이어를 아레나로 텔레포트
+     * 보드판 위에 평범하게 스폰 (걸어다닐 수 있음)
      */
     private void teleportToArenaView(Player player, Arena arena) {
         Location pos1 = arena.getPos1();
         Location pos2 = arena.getPos2();
 
-        // 8x6 보드판의 중심 좌표 계산
+        // 32x24 보드판의 중심 좌표 계산
         double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
         double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
         double boardY = Math.min(pos1.getY(), pos2.getY());
 
-        // 카메라 위치: 보드판 중심 위쪽
-        // 플레이어가 자유롭게 시점을 돌려볼 수 있도록 위치만 설정
-        double cameraY = boardY + 8; // 8블록 위
-        double cameraZ = centerZ + 5; // 보드 뒤쪽으로 5블록
+        // 보드판 위에 스폰 (보드판 표면 + 1블록)
+        Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
 
-        Location cameraPos = new Location(pos1.getWorld(), centerX, cameraY, cameraZ);
-
-        // 시점은 설정하지 않음 - 플레이어가 자유롭게 돌려볼 수 있음
-        // pitch와 yaw를 설정하지 않으면 플레이어의 현재 시점 유지
-
-        player.teleport(cameraPos);
+        player.teleport(spawnPos);
         plugin.getLogger().info("Player " + player.getName() + " teleported to arena at " +
-                               String.format("%.1f, %.1f, %.1f", centerX, cameraY, cameraZ));
+                               String.format("%.1f, %.1f, %.1f", centerX, boardY + 1, centerZ));
     }
 
     /**
      * Start combat phase
      */
     private void startCombatPhase() {
+        // 전투 시작 전 모든 미리보기 유닛 제거
+        clearAllPlayersPreviewUnits();
+
         // Determine if PVE or PVP
         boolean isPVE = (currentRound % 4 == 0 || currentRound % 7 == 0);
 
@@ -272,7 +296,7 @@ public class GameInstance {
             broadcast("&cPVP 전투 단계 - 다른 플레이어와 싸우세요!");
             matchPlayers();
         }
-
+        updateGameDisplays(); // updateGameDisplays는 updateScoreboard와 updatePlayerList를 모두 호출합니다.
         // 보스바 업데이트 및 타이머 시작
         phaseTimeRemaining = combatTime;
         updateBossBar();
@@ -288,9 +312,14 @@ public class GameInstance {
      * Start PVE combat for all alive players
      */
     private void startPVECombats() {
+        // PVE에서는 매칭 정보 초기화 (상대가 몬스터)
+        currentMatchups.clear();
+
         for (GamePlayer gp : players.values()) {
             if (gp.isAlive()) {
                 plugin.getCombatManager().startPVECombat(gp, currentRound);
+                // PVE는 상대가 없음 (몬스터)
+                currentMatchups.put(gp.getPlayerId(), null);
             }
         }
     }
@@ -299,6 +328,9 @@ public class GameInstance {
      * Match players for PVP combat
      */
     private void matchPlayers() {
+        // 이전 매칭 정보 초기화
+        currentMatchups.clear();
+
         List<GamePlayer> alivePlayers = players.values().stream()
             .filter(GamePlayer::isAlive)
             .collect(Collectors.toList());
@@ -309,6 +341,10 @@ public class GameInstance {
         for (int i = 0; i < alivePlayers.size() - 1; i += 2) {
             GamePlayer p1 = alivePlayers.get(i);
             GamePlayer p2 = alivePlayers.get(i + 1);
+
+            // 매칭 정보 저장
+            currentMatchups.put(p1.getPlayerId(), p2.getPlayerId());
+            currentMatchups.put(p2.getPlayerId(), p1.getPlayerId());
 
             p1.getPlayer().sendMessage("§c상대: §e" + p2.getPlayer().getName());
             p2.getPlayer().sendMessage("§c상대: §e" + p1.getPlayer().getName());
@@ -322,6 +358,8 @@ public class GameInstance {
             GamePlayer lastPlayer = alivePlayers.get(alivePlayers.size() - 1);
             lastPlayer.getPlayer().sendMessage("§e이번 라운드는 부전승입니다!");
             lastPlayer.recordWin(); // 부전승 처리
+            // 부전승 플레이어는 상대가 없음
+            currentMatchups.put(lastPlayer.getPlayerId(), null);
         }
     }
 
@@ -538,6 +576,49 @@ public class GameInstance {
     }
 
     /**
+     * 모든 플레이어의 Tab List 이름 (순위, HP, 상태 표시)을 업데이트합니다.
+     * 이 업데이트는 모든 게임 참가자에게 전송됩니다.
+     */
+    private void updatePlayerList() {
+        // 1. HP 내림차순으로 정렬하여 순위 확정
+        List<GamePlayer> sortedPlayers = players.values().stream()
+                .filter(gp -> gp.getPlayer() != null && gp.getPlayer().isOnline())
+                .sorted(Comparator.comparingInt(GamePlayer::getHealth).reversed())
+                .collect(Collectors.toList());
+
+        // 2. 각 플레이어의 Tab List 이름 업데이트
+        for (int i = 0; i < sortedPlayers.size(); i++) {
+            GamePlayer gp = sortedPlayers.get(i);
+            Player p = gp.getPlayer();
+            if (p == null || !p.isOnline()) continue;
+
+            int rank = i + 1;
+
+            // 생존/탈락 표시
+            String statusSymbol = gp.isAlive() ? "§a" : "§c✖";
+
+            // 연승/연패 표시
+            String streak = "";
+            if (gp.getWinStreak() > 0) {
+                streak = " §e▲" + gp.getWinStreak();
+            } else if (gp.getLoseStreak() > 0) {
+                streak = " §c▼" + gp.getLoseStreak();
+            }
+
+            // Tab List에 표시할 이름 형식: [순위]. [HP] [연승/연패] [상태] - [이름]
+            String tabName = String.format("§7#%d. %s%dHP%s §r§7- %s",
+                    rank,
+                    statusSymbol,
+                    gp.getHealth(),
+                    streak,
+                    p.getName());
+
+            // 모든 플레이어의 Tab List 이름을 업데이트합니다.
+            p.setPlayerListName(tabName);
+        }
+    }
+
+    /**
      * 스코어보드 설정 (초기화)
      */
     private void setupScoreboard(Player player, GamePlayer gamePlayer) {
@@ -556,7 +637,7 @@ public class GameInstance {
     }
 
     /**
-     * 스코어보드 업데이트 (시너지 + 모든 플레이어 HP/연승/연패)
+     * 스코어보드 업데이트 (아레나 정보 + 시너지)
      */
     private void updateScoreboard(Player player, GamePlayer gamePlayer) {
         Scoreboard scoreboard = playerScoreboards.get(player.getUniqueId());
@@ -572,103 +653,155 @@ public class GameInstance {
 
         int line = 15; // 스코어보드는 아래에서 위로 (15 -> 1)
 
-        // === 시너지 정보 ===
-        objective.getScore("§e§l━━━━━ 시너지 ━━━━━").setScore(line--);
+        // === 아레나 정보 (전투 중일 때만 표시) ===
+        if (currentPhase.isCombat()) {
+            objective.getScore("§e§l━━ 아레나 정보 ━━").setScore(line--);
 
-        // 보드에 있는 유닛들로 시너지 계산
+            // 1. 현재 플레이어의 전투 정보 확인 및 팀 색상 결정
+            boolean isPlayerTeam1 = true; // 기본값: Team 1 (파란색)
+            CombatInstance combat = null;
+
+            // PVP 라운드일 때만 CombatInstance를 확인하여 팀 배정을 동적으로 결정
+            if (currentPhase.isPVPCombat()) {
+                // 🚨 CombatManager에서 현재 플레이어가 참여하고 있는 전투를 가져옵니다.
+                combat = plugin.getCombatManager().getCombatByPlayer(player.getUniqueId());
+
+                if (combat != null && combat.getPlayer2() != null) {
+                    // 스코어보드를 보고 있는 플레이어가 combatInstance의 Player2라면,
+                    // 이 플레이어는 빨간 팀으로 간주됩니다.
+                    if (combat.getPlayer2().getPlayerId().equals(player.getUniqueId())) {
+                        isPlayerTeam1 = false; // 나는 Team 2 (빨간색)
+                    } else {
+                        isPlayerTeam1 = true;  // 나는 Team 1 (파란색)
+                    }
+                }
+            }
+
+            // 동적 색상 정의: 자신의 실제 팀 배정에 따라 색상이 결정됨
+            // Team 1 (Player 1) = 파랑(§b), Team 2 (Player 2/몬스터) = 빨강(§c)
+            String myColor = isPlayerTeam1 ? "§b" : "§c";
+            String opponentColor = isPlayerTeam1 ? "§c" : "§b";
+
+            String myStreak = "";
+            if (gamePlayer.getWinStreak() > 0) {
+                myStreak = " §e⬆" + gamePlayer.getWinStreak();
+            } else if (gamePlayer.getLoseStreak() > 0) {
+                myStreak = " §c⬇" + gamePlayer.getLoseStreak();
+            }
+            String myInfo = String.format("%s%s §f%dHP%s",
+                myColor,
+                player.getName().length() > 10 ? player.getName().substring(0, 10) : player.getName(),
+                gamePlayer.getHealth(),
+                myStreak);
+            objective.getScore(myInfo).setScore(line--);
+
+            objective.getScore("§7vs").setScore(line--);
+
+// 3. 상대 정보 (동적 색상 적용)
+            UUID opponentId = currentMatchups.get(player.getUniqueId());
+            if (opponentId != null) {
+                GamePlayer opponent = players.get(opponentId);
+                if (opponent != null) {
+                    String opponentStreak = "";
+                    if (opponent.getWinStreak() > 0) {
+                        opponentStreak = " §e⬆" + opponent.getWinStreak();
+                    } else if (opponent.getLoseStreak() > 0) {
+                        opponentStreak = " §c⬇" + opponent.getLoseStreak();
+                    }
+                    String opponentInfo = String.format("%s%s §f%dHP%s", // 🚨 opponentColor 적용
+                            opponentColor,
+                            opponent.getPlayer().getName().length() > 10 ?
+                                    opponent.getPlayer().getName().substring(0, 10) : opponent.getPlayer().getName(),
+                            opponent.getHealth(),
+                            opponentStreak);
+                    objective.getScore(opponentInfo).setScore(line--);
+                } else {
+                    // 오류 시 상대 색상을 임시로 빨간색으로 표시
+                    objective.getScore("§c상대 로드 중...").setScore(line--);
+                }
+            } else {
+                // PVE 또는 부전승
+                if (currentPhase == GamePhase.COMBAT_PVE) {
+                    // PVE 몬스터는 항상 Team 2(빨간색 영역)에 스폰되므로 §c로 고정
+                    objective.getScore("§c몬스터 라운드").setScore(line--);
+                } else {
+                    objective.getScore("§e부전승").setScore(line--);
+                }
+            }
+
+            objective.getScore("§r  ").setScore(line--); // 빈 줄
+        }
+
+        // 🚨 1. 보드 유닛 가져오기
         List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
-        Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies =
-            plugin.getSynergyManager().calculateSynergies(boardUnits);
 
-        // 모든 시너지 표시 (활성/비활성 모두)
-        Map<UnitTrait, Integer> traitCounts = new HashMap<>();
+        // 🚨 2. 시너지 계산 (activeSynergies 정의)
+        final Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies =
+                plugin.getSynergyManager().calculateSynergies(boardUnits);
+
+        // 🚨 3. 특성 카운트 계산 (traitCounts 정의)
+        final Map<UnitTrait, Integer> traitCounts = new HashMap<>();
         for (Unit unit : boardUnits) {
             for (UnitTrait trait : unit.getTraits()) {
                 traitCounts.put(trait, traitCounts.getOrDefault(trait, 0) + 1);
             }
         }
 
-        // 모든 시너지를 순회하며 표시
-        for (UnitTrait trait : UnitTrait.values()) {
+        // === 시너지 정보 ===
+        objective.getScore("§e§l━━━━━ 시너지 ━━━━━").setScore(line--);
+
+        // 시너지 정보를 표시할 리스트
+        List<String> synergyLines = new ArrayList<>();
+
+        // 활성화된 시너지 (우선순위 높음)
+        for (Map.Entry<UnitTrait, SynergyManager.ActiveSynergy> entry : activeSynergies.entrySet()) {
+            UnitTrait trait = entry.getKey();
+            SynergyManager.ActiveSynergy activeSynergy = entry.getValue();
             int count = traitCounts.getOrDefault(trait, 0);
 
-            // 시너지가 하나도 없는 경우는 표시하지 않음
-            if (count == 0) continue;
-
-            // 해당 시너지의 모든 티어 정보 가져오기
-            List<TraitBonus> bonuses = plugin.getSynergyManager().getTraitBonuses(trait);
-            if (bonuses.isEmpty()) continue;
-
-            // 활성화된 시너지인지 확인
-            SynergyManager.ActiveSynergy activeSynergy = activeSynergies.get(trait);
-
-            if (activeSynergy != null) {
-                // 활성화된 시너지 (골드 색상)
-                TraitBonus activeBonus = activeSynergy.getActiveBonus();
-                String display = String.format("§6%s §f(%d/%d) §a✓",
+            TraitBonus activeBonus = activeSynergy.getActiveBonus();
+            String display = String.format("§6%s §f(%d/%d) §a✓",
                     trait.getDisplayName(),
                     count,
                     activeBonus.getRequiredCount());
-                objective.getScore(display).setScore(line--);
-            } else {
-                // 비활성화된 시너지 (회색)
-                // 다음 티어 목표 표시
-                TraitBonus nextTier = bonuses.stream()
+            synergyLines.add(display);
+        }
+
+        // 비활성화된 시너지 중 다음 목표가 있는 시너지 (최대 3개만 표시)
+        int maxNextSynergies = 3;
+        int addedNext = 0;
+
+        for (UnitTrait trait : UnitTrait.values()) {
+            if (synergyLines.size() >= 6) break; // 시너지 표시 최대 6줄 제한
+
+            int count = traitCounts.getOrDefault(trait, 0);
+            if (count == 0 || activeSynergies.containsKey(trait)) continue;
+
+            List<TraitBonus> bonuses = plugin.getSynergyManager().getTraitBonuses(trait);
+
+            // 다음 티어 목표 찾기
+            TraitBonus nextTier = bonuses.stream()
                     .filter(b -> count < b.getRequiredCount())
                     .min(Comparator.comparingInt(TraitBonus::getRequiredCount))
                     .orElse(null);
 
-                if (nextTier != null) {
-                    String display = String.format("§7%s §f(%d/%d)",
+            if (nextTier != null) {
+                String display = String.format("§7%s §f(%d/%d)",
                         trait.getDisplayName(),
                         count,
                         nextTier.getRequiredCount());
-                    objective.getScore(display).setScore(line--);
-                }
+                synergyLines.add(display);
+                if (++addedNext >= maxNextSynergies) break;
             }
         }
 
-        // 시너지가 없으면 메시지 표시
-        if (traitCounts.isEmpty()) {
+        // 최종 시너지 라인 출력
+        if (synergyLines.isEmpty()) {
             objective.getScore("§7유닛을 배치하세요").setScore(line--);
-        }
-
-        objective.getScore("§r").setScore(line--); // 빈 줄
-
-        // === 플레이어 정보 ===
-        objective.getScore("§e§l━━━ 플레이어 ━━━").setScore(line--);
-
-        // 모든 플레이어 정보 표시 (HP 내림차순)
-        List<GamePlayer> sortedPlayers = players.values().stream()
-            .sorted(Comparator.comparingInt(GamePlayer::getHealth).reversed())
-            .collect(Collectors.toList());
-
-        for (GamePlayer gp : sortedPlayers) {
-            Player p = gp.getPlayer();
-            if (p == null) continue;
-
-            // 자신은 파란색, 다른 플레이어는 회색
-            String nameColor = gp.getPlayerId().equals(player.getUniqueId()) ? "§b" : "§7";
-
-            // 생존/탈락 표시
-            String status = gp.isAlive() ? "§a❤" : "§c✖";
-
-            // 연승/연패 표시
-            String streak = "";
-            if (gp.getWinStreak() > 0) {
-                streak = " §e⬆" + gp.getWinStreak();
-            } else if (gp.getLoseStreak() > 0) {
-                streak = " §c⬇" + gp.getLoseStreak();
+        } else {
+            for (String lineText : synergyLines) {
+                objective.getScore(lineText).setScore(line--);
             }
-
-            String display = String.format("%s%s §f%dHP%s %s",
-                nameColor,
-                p.getName().length() > 8 ? p.getName().substring(0, 8) : p.getName(),
-                gp.getHealth(),
-                streak,
-                status);
-
-            objective.getScore(display).setScore(line--);
         }
 
         objective.getScore("§r§r").setScore(line--); // 빈 줄
@@ -676,14 +809,66 @@ public class GameInstance {
     }
 
     /**
-     * 모든 플레이어의 스코어보드 업데이트
+     * 모든 게임 디스플레이 (스코어보드, Tab List)를 업데이트
      */
-    public void updateAllScoreboards() {
+    public void updateGameDisplays() {
+        // 1. 스코어보드 업데이트 (시너지, 라운드, 전투 매칭)
         for (GamePlayer gp : players.values()) {
             Player player = gp.getPlayer();
             if (player != null && player.isOnline()) {
                 updateScoreboard(player, gp);
             }
+        }
+        // 2. Tab List 업데이트 (플레이어 순위 및 상태)
+        updatePlayerList();
+    }
+
+    /**
+     * 준비 단계에서 유닛을 아레나에 실시간으로 배치 (프리뷰)
+     */
+    public void spawnPreviewUnit(UUID playerId, Unit unit, Position position) {
+        if (!currentPhase.equals(GamePhase.PREPARATION)) {
+            return; // 준비 단계가 아니면 무시
+        }
+
+        BoardManager boardManager = previewBoardManagers.get(playerId);
+        Arena arena = playerArenas.get(playerId);
+
+        if (boardManager != null && arena != null) {
+            boardManager.spawnUnit(unit, position, true, arena);
+        }
+    }
+
+    /**
+     * 준비 단계에서 유닛을 아레나에서 제거 (프리뷰)
+     */
+    public void removePreviewUnit(UUID playerId, Unit unit) {
+        if (!currentPhase.equals(GamePhase.PREPARATION)) {
+            return; // 준비 단계가 아니면 무시
+        }
+
+        BoardManager boardManager = previewBoardManagers.get(playerId);
+        if (boardManager != null) {
+            boardManager.removeEntity(unit);
+        }
+    }
+
+    /**
+     * 준비 단계에서 모든 프리뷰 유닛 제거 (전투 시작 전)
+     */
+    public void clearAllPreviewUnits(UUID playerId) {
+        BoardManager boardManager = previewBoardManagers.get(playerId);
+        if (boardManager != null) {
+            boardManager.clearAllUnits();
+        }
+    }
+
+    /**
+     * 준비 단계에서 모든 플레이어의 프리뷰 유닛 제거
+     */
+    public void clearAllPlayersPreviewUnits() {
+        for (UUID playerId : previewBoardManagers.keySet()) {
+            clearAllPreviewUnits(playerId);
         }
     }
 }

@@ -14,6 +14,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.*;
+import org.bukkit.event.player.PlayerSwapHandItemsEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.SkullMeta;
 import org.bukkit.Bukkit;
@@ -200,12 +201,15 @@ public class InventoryGUIListener implements Listener {
             if (gamePlayer.addUnitToBench(unitAtPos)) {
                 gamePlayer.removeUnitFromBoard(pos);
                 player.sendMessage("§a유닛을 벤치로 이동했습니다!");
-                guiManager.setupGameInventory(player, gamePlayer);
-                // 스코어보드 업데이트 (시너지 변경)
+
+                // 미리보기 유닛 제거
                 GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
                 if (game != null) {
-                    game.updateAllScoreboards();
+                    game.removePreviewUnit(player.getUniqueId(), unitAtPos);
+                    game.updateGameDisplays();
                 }
+
+                guiManager.setupGameInventory(player, gamePlayer);
             } else {
                 player.sendMessage("§c벤치가 가득 찼습니다!");
             }
@@ -218,12 +222,15 @@ public class InventoryGUIListener implements Listener {
                     if (gamePlayer.placeUnit(selectedUnit, pos)) {
                         player.sendMessage("§a유닛을 배치했습니다!");
                         guiManager.clearSelectedUnitForPlacement(player.getUniqueId());
-                        guiManager.setupGameInventory(player, gamePlayer);
-                        // 스코어보드 업데이트 (시너지 변경)
+
+                        // 미리보기 유닛 스폰
                         GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
                         if (game != null) {
-                            game.updateAllScoreboards();
+                            game.spawnPreviewUnit(player.getUniqueId(), selectedUnit, pos);
+                            game.updateGameDisplays();
                         }
+
+                        guiManager.setupGameInventory(player, gamePlayer);
                     } else {
                         // 배치 실패 - 벤치에 다시 추가
                         gamePlayer.addUnitToBench(selectedUnit);
@@ -262,7 +269,8 @@ public class InventoryGUIListener implements Listener {
                 // 스코어보드 업데이트 (시너지 변경)
                 GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
                 if (game != null) {
-                    game.updateAllScoreboards();
+                    game.// 모든 플레이어 스코어보드 업데이트 🚨 -> updateGameDisplays로 변경
+                            updateGameDisplays();
                 }
             }
             // 좌클릭: 배치용으로 선택 (전투 중에는 이미 막힘)
@@ -375,6 +383,29 @@ public class InventoryGUIListener implements Listener {
         String title = event.getView().getTitle();
         if (title.contains("마토체스") || title.contains("플레이어 목록")) {
             event.setCancelled(true);
+        }
+    }
+
+    /**
+     * Shift+F 키 감지 (손 교체 이벤트)
+     * Adventure 모드에서 Shift+F로 GUI 열기
+     */
+    @EventHandler
+    public void onSwapHandItems(PlayerSwapHandItemsEvent event) {
+        Player player = event.getPlayer();
+        GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+        if (game == null) return;
+
+        GamePlayer gamePlayer = game.getPlayer(player.getUniqueId());
+        if (gamePlayer == null) return;
+
+        // Shift를 누르고 있는지 확인
+        if (player.isSneaking()) {
+            // F키 이벤트 취소 (손 교체 방지)
+            event.setCancelled(true);
+
+            // 통합 GUI 열기
+            guiManager.setupGameInventory(player, gamePlayer);
         }
     }
 }

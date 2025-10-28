@@ -8,6 +8,7 @@ import com.matochess.data.Unit;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.attribute.Attribute;
 import org.bukkit.entity.LivingEntity;
 
 import java.util.HashMap;
@@ -46,39 +47,29 @@ public class BoardManager {
         // 여기서는 Blue Team (player1)의 아레나를 사용하며,
         // Blue Team은 pos1 기준으로, Red Team(몬스터/player2)은 pos2 기준으로 배치된다고 가정합니다.
 
-        double xBase = isBlueTeam ? arena.getPos1().getX() : arena.getPos2().getX(); // 🚨 Arena pos 사용
-        double yBase = arena.getPos1().getY(); // Y 좌표는 동일하다고 가정
-        double zBase = isBlueTeam ? arena.getPos1().getZ() : arena.getPos2().getZ(); // 🚨 Arena pos 사용
-
-// Calculate spawn location (relative to grid)
-        // Blue Team은 (xBase, zBase)를 시작점으로 사용하고, Red Team은 반대편을 시작점으로 사용해야 합니다.
-        // 현재는 간단하게 아레나의 XZ 경계 중 하나를 사용합니다. (좌표 시스템에 따라 상세 조정 필요)
-
-        // 🚨 P1(Blue)은 pos1을, P2(Red/Monster)는 pos2를 기준으로 배치된다고 가정합니다.
-
-        // 유닛 배치판은 8x8 (혹은 8x3) 등 정해진 크기가 있으므로, 아레나 pos1을 기준으로 삼아 계산합니다.
-
-        // Red 팀은 Blue 팀과 반대 방향(예: Z 축)에 배치되어야 합니다.
-        // 아레나 pos1, pos2의 X, Z 좌표를 사용하여 유닛이 소환될 영역을 계산해야 합니다.
-
-        // **간단화된 로직 (수평 Z축이 전투 방향이라고 가정):**
-        // Blue Team은 Z1 기준으로, Red Team은 Z2 기준으로 소환 (Z2가 더 큰 Z 좌표라고 가정)
-
+        // 아레나 경계 계산
+        double minX = Math.min(arena.getPos1().getX(), arena.getPos2().getX());
         double minZ = Math.min(arena.getPos1().getZ(), arena.getPos2().getZ());
         double maxZ = Math.max(arena.getPos1().getZ(), arena.getPos2().getZ());
-        double spawnY = arena.getPos1().getY(); // Y는 고정
+        double spawnY = Math.min(arena.getPos1().getY(), arena.getPos2().getY());
 
-        // Blue Team (Team 1)은 낮은 Z축에서 소환 (예: Z = Z1)
-        double zOffset1 = minZ;
+        // 보드판 레이아웃 (각 칸 = 4x4 블록):
+        // - X축: 8칸 × 4블록 = 32블록
+        // - Z축: Blue Team 3칸 × 4블록 = 12블록, Red Team 3칸 × 4블록 = 12블록
+        // Blue Team은 Z축 앞쪽 (minZ), Red Team은 Z축 뒤쪽
 
-        // Red Team (Team 2)은 높은 Z축에서 소환 (예: Z = Z2 - 3)
-        // 8x3 보드판이라고 가정하고, 몬스터가 가장자리에서 3칸 떨어진 위치에 소환되도록 합니다.
-        double zOffset2 = maxZ;
+        // Blue Team은 앞쪽 12블록 영역 (minZ ~ minZ+12)
+        // Red Team은 뒤쪽 12블록 영역 (maxZ-12 ~ maxZ)
+        double zOffset = isBlueTeam ? minZ : (maxZ - 12);
 
-        double spawnX = xBase + position.getX();
-        double spawnZ = (isBlueTeam ? zOffset1 : zOffset2) + position.getY(); // position.getY()는 Z축 offset
+        // GUI의 각 칸(1칸)을 4x4 블록으로 매핑
+        // position.getX()는 GUI X좌표 (0~7) → 실제 월드 X축
+        // position.getY()는 GUI Y좌표 (0~2) → 실제 월드 Z축
+        // 유닛은 4x4 영역의 중앙(+2.0블록)에 스폰
+        double spawnX = minX + (position.getX() * 4) + 2.0;
+        double spawnZ = zOffset + (position.getY() * 4) + 2.0;
 
-        Location spawnLoc = new Location(world, spawnX + 0.5, spawnY, spawnZ + 0.5);
+        Location spawnLoc = new Location(world, spawnX, spawnY + 1, spawnZ);
 
         // Spawn entity
         LivingEntity entity = (LivingEntity) world.spawnEntity(spawnLoc, unit.getEntityType());
@@ -87,18 +78,23 @@ public class BoardManager {
         entity.setMaxHealth(unit.getHealth());
         entity.setHealth(unit.getHealth());
 
-        // 내 유닛(Blue Team)에게 발광 효과 적용
-        if (isBlueTeam) {
-            entity.setGlowing(true);
-            // 발광 색상은 팀(스코어보드 팀)으로 설정할 수 있음
-            // Note: 발광 색상 변경은 스코어보드 팀이 필요함 (나중에 추가 가능)
-        }
-
-        // Update health bar (Blue Team은 다른 색상)
+        // Update health bar (팀별 색상으로 구분, 발광 효과 없음)
         updateHealthBar(entity, unit, isBlueTeam);
 
-        // Prevent AI (we control them)
-        entity.setAI(false);
+        // AI 활성화 - 자연스러운 움직임과 공격을 위해
+        entity.setAI(true);
+
+        // Follow Range 증가 (타겟을 먼 거리에서도 따라가도록)
+        if (entity.getAttribute(Attribute.GENERIC_FOLLOW_RANGE) != null) {
+            entity.getAttribute(Attribute.GENERIC_FOLLOW_RANGE).setBaseValue(64.0); // 64블록까지 따라감
+        }
+
+        // 중력 적용 (땅에 착지)
+        entity.setGravity(true);
+
+        // 몹이 자연스럽게 소멸되지 않도록 설정
+        entity.setRemoveWhenFarAway(false);
+        entity.setPersistent(true);
 
         // Store reference
         spawnedEntities.put(unit.getInstanceId(), entity);
@@ -114,7 +110,7 @@ public class BoardManager {
     }
 
     /**
-     * 엔티티의 체력바 업데이트 (팀별 색상 구분)
+     * 엔티티의 체력바 업데이트 (팀별 색상 구분 - 체력에 관계없이 색상 고정)
      */
     public void updateHealthBar(LivingEntity entity, Unit unit, boolean isBlueTeam) {
         double currentHealth = entity.getHealth();
@@ -127,36 +123,21 @@ public class BoardManager {
 
         StringBuilder healthBar = new StringBuilder();
 
+        // 팀별로 색상 고정 (체력에 따라 변하지 않음)
+        String barColor = isBlueTeam ? "§b" : "§c"; // 파란색 vs 빨간색
+
         for (int i = 0; i < totalBars; i++) {
             if (i < filledBars) {
-                // Blue Team (내 유닛)은 파란색 계열 체력바
-                if (isBlueTeam) {
-                    if (healthPercentage > 50) {
-                        healthBar.append("§b"); // Aqua (밝은 파란색)
-                    } else if (healthPercentage > 25) {
-                        healthBar.append("§9"); // Blue (파란색)
-                    } else {
-                        healthBar.append("§1"); // Dark Blue (어두운 파란색)
-                    }
-                }
-                // Red Team (적 유닛)은 빨간색/노란색 계열 체력바
-                else {
-                    if (healthPercentage > 50) {
-                        healthBar.append("§a"); // Green
-                    } else if (healthPercentage > 25) {
-                        healthBar.append("§e"); // Yellow
-                    } else {
-                        healthBar.append("§c"); // Red
-                    }
-                }
-                healthBar.append("█");
+                healthBar.append(barColor).append("█");
             } else {
                 healthBar.append("§7█");
             }
         }
 
-        // 유닛 이름 + 체력 표시 (Blue Team은 이름도 파란색)
-        String nameColor = isBlueTeam ? "§b" : "§f";
+        healthBar.append("§r");
+
+        // 유닛 이름 + 체력 표시 (팀별 색상)
+        String nameColor = isBlueTeam ? "§b" : "§c";
         String displayName = nameColor + unit.getDisplayName() + " " + healthBar.toString() +
             " §7[§f" + (int)currentHealth + "§7/§f" + (int)maxHealth + "§7]";
 

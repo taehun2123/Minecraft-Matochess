@@ -2,9 +2,7 @@ package com.matochess;
 
 import com.matochess.combat.CombatManager;
 import com.matochess.commands.AdminCommand;
-import com.matochess.commands.BoardCommand;
 import com.matochess.commands.QueueCommand;
-import com.matochess.commands.ShopCommand;
 import com.matochess.commands.StatsCommand;
 import com.matochess.core.EquipmentRegistry;
 import com.matochess.core.MonsterRegistry;
@@ -12,15 +10,9 @@ import com.matochess.core.SynergyManager;
 import com.matochess.core.UnitRegistry;
 import com.matochess.data.SQLiteDataManager;
 import com.matochess.game.GameManager;
-import com.matochess.gui.GUIManager;
 import com.matochess.gui.InventoryGUIManager;
 import com.matochess.gui.QueueGUI;
-import com.matochess.listeners.BoardSetupListener;
-import com.matochess.listeners.GUIListener;
-import com.matochess.listeners.InventoryGUIListener;
-import com.matochess.listeners.ItemDropListener;
-import com.matochess.listeners.QueueGUIListener;
-import com.matochess.listeners.SpectatorMovementListener;
+import com.matochess.listeners.*;
 import com.matochess.managers.ArenaManager;
 import com.matochess.managers.PlayerDataManager;
 import com.matochess.matchmaking.MatchmakingManager;
@@ -44,7 +36,6 @@ public class MatoChessPlugin extends JavaPlugin {
     private SynergyManager synergyManager;
     private SQLiteDataManager dataManager;
     private GameManager gameManager;
-    private GUIManager guiManager;
     private InventoryGUIManager inventoryGUIManager;
     private CombatManager combatManager;
     private MatchmakingManager matchmakingManager;
@@ -146,9 +137,6 @@ public class MatoChessPlugin extends JavaPlugin {
                 return false;
             }
 
-            // GUI manager
-            this.guiManager = new GUIManager(this);
-
             // Inventory GUI manager
             this.inventoryGUIManager = new InventoryGUIManager(this);
             getLogger().info("InventoryGUIManager initialized");
@@ -205,14 +193,14 @@ public class MatoChessPlugin extends JavaPlugin {
     private void registerEvents() {
         getLogger().info("Registering events...");
 
-        getServer().getPluginManager().registerEvents(new GUIListener(this), this);
-
-        // New listeners
+        // Listeners
         getServer().getPluginManager().registerEvents(boardSetupListener, this);
         getServer().getPluginManager().registerEvents(new QueueGUIListener(this), this);
         getServer().getPluginManager().registerEvents(new InventoryGUIListener(this, inventoryGUIManager), this);
         getServer().getPluginManager().registerEvents(new SpectatorMovementListener(this), this);
         getServer().getPluginManager().registerEvents(new ItemDropListener(this), this);
+        getServer().getPluginManager().registerEvents(new CombatProtectionListener(this), this);
+        getServer().getPluginManager().registerEvents(new WorldProtectionListener(this), this);
 
         getLogger().info("Events registered successfully.");
     }
@@ -244,10 +232,6 @@ public class MatoChessPlugin extends JavaPlugin {
 
     public GameManager getGameManager() {
         return gameManager;
-    }
-
-    public GUIManager getGUIManager() {
-        return guiManager;
     }
 
     public InventoryGUIManager getInventoryGUIManager() {
