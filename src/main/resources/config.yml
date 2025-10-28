@@ -1,0 +1,207 @@
+# MatoChess Plugin Configuration
+
+# Data Storage
+# 플레이어 데이터는 SQLite 데이터베이스(matochess.db)에 자동으로 저장됩니다.
+# 별도의 데이터베이스 서버 설치가 필요 없습니다.
+# 데이터베이스 파일 위치: plugins/MatoChess/matochess.db
+
+# Game settings
+game:
+  # Maximum players per game
+  max-players: 8
+
+  # Minimum players to start a game
+  # 테스트 모드가 활성화되면 이 값은 무시되고 test-min-players가 사용됩니다
+  min-players: 4
+
+  # Test mode settings
+  # 테스트 모드를 활성화하면 적은 인원으로 게임을 시작할 수 있습니다
+  test-mode: false
+  test-min-players: 2
+
+  # Preparation phase duration (seconds)
+  preparation-time: 30
+
+  # Combat phase max duration (seconds)
+  combat-time: 60
+
+  # Sushi selection phase duration (seconds)
+  sushi-selection-time: 15
+
+  # Starting resources
+  starting-gold: 5
+  starting-level: 1
+  starting-hp: 100
+
+  # Economy settings
+  gold-per-round: 1
+  max-win-streak-bonus: 5
+  xp-per-round: 2
+  xp-cost-gold: 4
+  xp-per-purchase: 2
+
+  # Level settings
+  max-level: 8
+  # XP required for each level
+  xp-required:
+    1: 0
+    2: 2
+    3: 6
+    4: 10
+    5: 20
+    6: 36
+    7: 48
+    8: 64
+
+  # Board size
+  board:
+    width: 8
+    height: 6
+
+# Unit settings
+units:
+  # Shop refresh settings
+  shop-size: 5
+  reroll-cost: 2
+
+  # Unit tier probability by player level
+  probability:
+    # Format: [1-star, 2-star, 3-star, 4-star, 5-star]
+    level-1: [90, 10, 0, 0, 0]
+    level-2: [75, 25, 0, 0, 0]
+    level-3: [40, 50, 10, 0, 0]
+    level-4: [30, 55, 15, 0, 0]
+    level-5: [20, 40, 30, 10, 0]
+    level-6: [10, 30, 40, 18, 2]
+    level-7: [5, 20, 40, 30, 5]
+    level-8: [3, 15, 35, 35, 12]
+
+# Ranking system
+ranking:
+  # Rating points change by placement and player count
+  # 인원 수와 순위에 따라 차등 점수가 부여됩니다
+
+  # 2인 게임 (테스트 모드)
+  placement-points-2:
+    1: 50
+    2: -50
+
+  # 3인 게임
+  placement-points-3:
+    1: 30
+    2: 10
+    3: -30
+
+  # 4인 게임 (일반 모드 최소 인원)
+  placement-points-4:
+    1: 30
+    2: 20
+    3: -20
+    4: -30
+
+  # 5인 게임
+  placement-points-5:
+    1: 30
+    2: 20
+    3: 0
+    4: -20
+    5: -30
+
+  # 6인 게임
+  placement-points-6:
+    1: 30
+    2: 20
+    3: 10
+    4: -10
+    5: -20
+    6: -30
+
+  # 7인 게임
+  placement-points-7:
+    1: 30
+    2: 25
+    3: 15
+    4: 0
+    5: -15
+    6: -25
+    7: -30
+
+  # 8인 게임 (최대 인원)
+  placement-points-8:
+    1: 50
+    2: 30
+    3: 20
+    4: 10
+    5: -10
+    6: -20
+    7: -30
+    8: -50
+
+  # Points required to advance tier
+  points-per-tier: 100
+
+  # Tier list (lowest to highest)
+  tiers:
+    - COPPER
+    - SILVER
+    - GOLD
+    - EMERALD
+    - DIAMOND
+    - NETHERITE
+    - ENDER
+
+  # Division per tier (5 to 1)
+  divisions-per-tier: 5
+
+# Matchmaking settings
+matchmaking:
+  # Number of queue rooms
+  max-rooms: 5
+
+# Arena locations
+arena:
+  # Lobby spawn (waiting room and post-game spawn)
+  lobby-spawn:
+    world: world
+    x: 0.0
+    y: 64.0
+    z: 0.0
+    yaw: 0.0
+    pitch: 0.0
+
+  # Board template (8x6 chessboard)
+  # 관리자가 /mcadmin setboard로 설정합니다
+  # 첫 우클릭: 바닥 모서리, 두 번째 우클릭: 대각선 반대편 최상단
+  board-template:
+    world: ""
+    pos1:
+      x: 0.0
+      y: 64.0
+      z: 0.0
+    pos2:
+      x: 0.0
+      y: 64.0
+      z: 0.0
+
+  # Arena world (40개의 체스판이 생성될 월드)
+  # /mcadmin setworld <월드명>으로 설정 후 자동 생성됩니다
+  arena-world: ""
+
+  # Number of pre-generated arenas
+  max-arenas: 40
+
+  # Spacing between arenas (blocks)
+  # 각 체스판 사이의 간격 (블록 단위)
+  arena-spacing: 30
+
+# Messages
+messages:
+  prefix: "&e[MatoChess]&r "
+  queue-joined: "&aYou joined the matchmaking queue!"
+  queue-left: "&cYou left the matchmaking queue."
+  game-starting: "&aGame starting in {time} seconds..."
+  round-starting: "&6Round {round} starting!"
+  preparation-phase: "&ePrepare your units! ({time}s remaining)"
+  combat-phase: "&cCombat started!"
+  victory: "&6&lVICTORY! &eYou placed #{placement}!"
+  defeat: "&c&lDEFEAT! &7You placed #{placement}."

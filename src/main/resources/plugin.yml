@@ -1,0 +1,42 @@
+name: MatoChess
+version: '${project.version}'
+main: com.matochess.MatoChessPlugin
+api-version: '1.20'
+author: MatoChess Team
+description: Auto Battler plugin for Minecraft inspired by TFT
+# Supports Minecraft 1.20.x and above (1.20.4, 1.21.x, etc.)
+
+commands:
+  matochess:
+    description: Main MatoChess command
+    aliases: [mc, mato]
+    usage: /<command> [help|join|leave|stats]
+
+  mcqueue:
+    description: Join matchmaking queue
+    aliases: [queue, mcq]
+    usage: /<command>
+
+  mcstats:
+    description: View your stats and tier
+    aliases: [stats]
+    usage: /<command> [player]
+
+  mcadmin:
+    description: Admin commands for MatoChess
+    aliases: [mca]
+    usage: /<command> [reload|reset|debug]
+    permission: matochess.admin
+
+permissions:
+  matochess.admin:
+    description: Allows access to admin commands
+    default: op
+
+  matochess.play:
+    description: Allows playing MatoChess
+    default: true
+
+  matochess.vip:
+    description: VIP privileges
+    default: false
