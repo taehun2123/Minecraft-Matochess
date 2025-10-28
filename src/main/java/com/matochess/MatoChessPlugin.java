@@ -197,7 +197,6 @@ public class MatoChessPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(boardSetupListener, this);
         getServer().getPluginManager().registerEvents(new QueueGUIListener(this), this);
         getServer().getPluginManager().registerEvents(new InventoryGUIListener(this, inventoryGUIManager), this);
-        getServer().getPluginManager().registerEvents(new SpectatorMovementListener(this), this);
         getServer().getPluginManager().registerEvents(new ItemDropListener(this), this);
         getServer().getPluginManager().registerEvents(new CombatProtectionListener(this), this);
         getServer().getPluginManager().registerEvents(new WorldProtectionListener(this), this);

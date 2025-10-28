@@ -147,8 +147,6 @@ public class GameInstance {
         double x = plugin.getConfig().getDouble("arena.lobby-spawn.x", 0);
         double y = plugin.getConfig().getDouble("arena.lobby-spawn.y", 64);
         double z = plugin.getConfig().getDouble("arena.lobby-spawn.z", 0);
-        float yaw = (float) plugin.getConfig().getDouble("arena.lobby-spawn.yaw", 0);
-        float pitch = (float) plugin.getConfig().getDouble("arena.lobby-spawn.pitch", 0);
 
         org.bukkit.World world = Bukkit.getWorld(worldName);
         if (world == null) {
@@ -156,7 +154,7 @@ public class GameInstance {
             return;
         }
 
-        org.bukkit.Location lobbyLoc = new org.bukkit.Location(world, x, y, z, yaw, pitch);
+        org.bukkit.Location lobbyLoc = new org.bukkit.Location(world, x, y, z);
 
         for (GamePlayer gp : players.values()) {
             Player player = gp.getPlayer();
@@ -169,6 +167,19 @@ public class GameInstance {
                 player.sendMessage("§a게임 로비로 이동하였습니다!");
             }
         }
+    }
+
+    /**
+     * 이자 계산 메소드
+     * 10골드당 1골드, 최대 50골드(5골드 이자)
+     */
+    private int calculateInterest(int currentGold) {
+        if (currentGold < 10) {
+            return 0;
+        }
+        // 10골드당 1골드 이자, 최대 50골드까지 계산
+        int interestGold = Math.min(currentGold / 10, 5);
+        return interestGold;
     }
 
     /**
@@ -198,6 +209,12 @@ public class GameInstance {
                 // 큰 글자로 안내 메시지 표시
                 player.sendTitle("§6§l준비 단계", "§e[ Shift + F ] 키를 눌러 병력을 준비하세요!", 10, 60, 20);
 
+                // 이자 계산 및 지급 (골드 지급 전에)
+                int interest = calculateInterest(gp.getGold());
+                if (interest > 0) {
+                    gp.addGold(interest);
+                }
+
                 // Give gold (기본 + 연승 보너스 + 연패 보너스)
                 int baseGold = goldPerRound;
                 int winStreakGold = gp.getWinStreakBonus();
@@ -222,6 +239,9 @@ public class GameInstance {
 
                 // 골드 획득 상세 표시
                 StringBuilder goldMsg = new StringBuilder("§6골드: §f+" + baseGold);
+                if (interest > 0) {
+                    goldMsg.append(" §b+").append(interest).append("(이자)");
+                }
                 if (winStreakGold > 0) {
                     goldMsg.append(" §e+").append(winStreakGold).append("(연승)");
                 }
@@ -245,6 +265,9 @@ public class GameInstance {
 
         // 모든 플레이어 스코어보드 업데이트 🚨 -> updateGameDisplays로 변경
         updateGameDisplays();
+
+        // 배치판의 모든 유닛을 미리보기로 표시
+        refreshAllPlayersPreviewUnits();
 
         // 남은 시간 초기화 및 타이머 시작
         phaseTimeRemaining = preparationTime;
@@ -438,6 +461,21 @@ public class GameInstance {
 
         // 보스바 제거
         bossBar.removeAll();
+
+        // 보스바 타이머 정지
+        if (bossBarTask != null && !bossBarTask.isCancelled()) {
+            bossBarTask.cancel();
+        }
+
+        // 스코어보드 초기화 및 제거
+        for (GamePlayer gp : rankedPlayers) {
+            Player player = gp.getPlayer();
+            if (player != null && player.isOnline()) {
+                // 기본 스코어보드로 복원
+                player.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
+            }
+        }
+        playerScoreboards.clear();
 
         // 아레나 반환
         for (Arena arena : playerArenas.values()) {
@@ -835,7 +873,7 @@ public class GameInstance {
         Arena arena = playerArenas.get(playerId);
 
         if (boardManager != null && arena != null) {
-            boardManager.spawnUnit(unit, position, true, arena);
+            boardManager.spawnUnit(unit, position, true, arena).setAI(false);
         }
     }
 
@@ -869,6 +907,40 @@ public class GameInstance {
     public void clearAllPlayersPreviewUnits() {
         for (UUID playerId : previewBoardManagers.keySet()) {
             clearAllPreviewUnits(playerId);
+        }
+    }
+
+    /**
+     * 배치판의 모든 유닛을 미리보기로 갱신
+     */
+    public void refreshAllPreviewUnits(UUID playerId) {
+        if (!currentPhase.equals(GamePhase.PREPARATION)) {
+            return;
+        }
+
+        // 기존 미리보기 모두 제거
+        clearAllPreviewUnits(playerId);
+
+        // 배치판의 모든 유닛을 미리보기로 스폰
+        GamePlayer gp = players.get(playerId);
+        if (gp != null) {
+            BoardManager boardManager = previewBoardManagers.get(playerId);
+            Arena arena = playerArenas.get(playerId);
+
+            if (boardManager != null && arena != null) {
+                gp.getBoard().forEach((position, unit) -> {
+                    boardManager.spawnUnit(unit, position, true, arena).setAI(false);
+                });
+            }
+        }
+    }
+
+    /**
+     * 모든 플레이어의 미리보기 유닛 갱신
+     */
+    public void refreshAllPlayersPreviewUnits() {
+        for (UUID playerId : players.keySet()) {
+            refreshAllPreviewUnits(playerId);
         }
     }
 }

@@ -26,6 +26,13 @@ public class Unit {
     private double baseMagicResist;
     private double baseRange;
 
+    // Attack and skill system
+    private AttackType attackType; // 물리/마법 공격 타입
+    private UnitSkill skill; // 유닛의 스킬
+    private double mana = 0.0; // 현재 마나
+    private double manaPerAttack = 10.0; // 공격당 마나 획득량
+    private static final double MAX_MANA = 100.0; // 최대 마나 (스킬 발동)
+
     // Additional combat stats (not multiplied by level)
     private double criticalChance = 0.0;  // Percentage (0-100)
     private double criticalDamage = 50.0; // Percentage multiplier (default 50% extra)
@@ -63,6 +70,10 @@ public class Unit {
         this.baseArmor = 5.0;
         this.baseMagicResist = 5.0;
         this.baseRange = 2.0;
+
+        // Default attack type (will be set by unit definitions)
+        this.attackType = AttackType.PHYSICAL;
+        this.skill = null;
     }
 
     /**
@@ -324,6 +335,61 @@ public class Unit {
     }
 
     /**
+     * 마나 시스템 메소드
+     */
+
+    // 공격 시 마나 증가
+    public void addMana(double amount) {
+        this.mana = Math.min(this.mana + amount, MAX_MANA);
+    }
+
+    // 마나 초기화 (스킬 사용 후)
+    public void resetMana() {
+        this.mana = 0.0;
+    }
+
+    // 스킬 사용 가능 여부 확인
+    public boolean canCastSkill() {
+        return this.mana >= MAX_MANA && this.skill != null;
+    }
+
+    // 마나 획득량 설정
+    public void setManaPerAttack(double manaPerAttack) {
+        this.manaPerAttack = manaPerAttack;
+    }
+
+    // 공격 타입 설정
+    public void setAttackType(AttackType attackType) {
+        this.attackType = attackType;
+    }
+
+    // 스킬 설정
+    public void setSkill(UnitSkill skill) {
+        this.skill = skill;
+    }
+
+    // Getters for new fields
+    public AttackType getAttackType() {
+        return attackType;
+    }
+
+    public UnitSkill getSkill() {
+        return skill;
+    }
+
+    public double getMana() {
+        return mana;
+    }
+
+    public double getManaPerAttack() {
+        return manaPerAttack;
+    }
+
+    public static double getMaxMana() {
+        return MAX_MANA;
+    }
+
+    /**
      * Create a deep copy of this unit
      * Used for PVE monsters and shop generation
      */
@@ -353,6 +419,12 @@ public class Unit {
         copy.criticalChance = this.criticalChance;
         copy.criticalDamage = this.criticalDamage;
         copy.lifeSteal = this.lifeSteal;
+
+        // Copy attack type and skill system
+        copy.attackType = this.attackType;
+        copy.skill = this.skill;
+        copy.manaPerAttack = this.manaPerAttack;
+        copy.mana = 0.0; // Reset mana for new copy
 
         // Copy traits
         for (UnitTrait trait : this.traits) {

@@ -10,6 +10,8 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -64,10 +66,11 @@ public class BoardManager {
 
         // GUI의 각 칸(1칸)을 4x4 블록으로 매핑
         // position.getX()는 GUI X좌표 (0~7) → 실제 월드 X축
-        // position.getY()는 GUI Y좌표 (0~2) → 실제 월드 Z축
+        // position.getY()는 GUI Y좌표 (0~2) → 실제 월드 Z축 (반전: 0→뒤, 2→앞)
         // 유닛은 4x4 영역의 중앙(+2.0블록)에 스폰
         double spawnX = minX + (position.getX() * 4) + 2.0;
-        double spawnZ = zOffset + (position.getY() * 4) + 2.0;
+        // Row 반전: GUI Row 0 → 뒤쪽(8블록), GUI Row 2 → 앞쪽(0블록)
+        double spawnZ = zOffset + ((2 - position.getY()) * 4) + 2.0;
 
         Location spawnLoc = new Location(world, spawnX, spawnY + 1, spawnZ);
 
@@ -84,17 +87,38 @@ public class BoardManager {
         // AI 활성화 - 자연스러운 움직임과 공격을 위해
         entity.setAI(true);
 
-        // Follow Range 증가 (타겟을 먼 거리에서도 따라가도록)
+        // Follow Range 대폭 증가 (타겟을 매우 먼 거리에서도 따라가도록)
         if (entity.getAttribute(Attribute.GENERIC_FOLLOW_RANGE) != null) {
-            entity.getAttribute(Attribute.GENERIC_FOLLOW_RANGE).setBaseValue(64.0); // 64블록까지 따라감
+            entity.getAttribute(Attribute.GENERIC_FOLLOW_RANGE).setBaseValue(128.0); // 128블록까지 따라감 (전체 보드판 커버)
+        }
+
+        // 공격력 설정 (AI가 공격할 수 있도록)
+        if (entity.getAttribute(Attribute.GENERIC_ATTACK_DAMAGE) != null) {
+            entity.getAttribute(Attribute.GENERIC_ATTACK_DAMAGE).setBaseValue(unit.getAttackDamage());
+        }
+
+        // 이동 속도 설정 (attackSpeed 기반)
+        if (entity.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED) != null) {
+            double baseSpeed = 0.5;
+            double speedMultiplier = Math.min(unit.getAttackSpeed() / 100.0, 2.0);
+            speedMultiplier = Math.max(speedMultiplier, 0.5);
+            entity.getAttribute(Attribute.GENERIC_MOVEMENT_SPEED).setBaseValue(baseSpeed * speedMultiplier);
         }
 
         // 중력 적용 (땅에 착지)
         entity.setGravity(true);
+        entity.addPotionEffect(new PotionEffect(PotionEffectType.FIRE_RESISTANCE, 2400000,2400000));
 
         // 몹이 자연스럽게 소멸되지 않도록 설정
         entity.setRemoveWhenFarAway(false);
         entity.setPersistent(true);
+
+        // Mob 엔티티의 경우 어그로 및 AI 설정 강화
+        if (entity instanceof org.bukkit.entity.Mob) {
+            org.bukkit.entity.Mob mob = (org.bukkit.entity.Mob) entity;
+            mob.setAware(true); // AI 인식 활성화
+            mob.setCollidable(true); // 충돌 가능
+        }
 
         // Store reference
         spawnedEntities.put(unit.getInstanceId(), entity);

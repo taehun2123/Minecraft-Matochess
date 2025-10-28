@@ -109,16 +109,16 @@ public class ArenaManager {
             int startX = col * (boardWidth + spacing);
             int startZ = row * (boardLength + spacing);
 
-            // 잔디블럭으로 32x24 보드판 생성
+            // 32x24 보드판 생성
             for (int x = 0; x < boardWidth; x++) {
                 for (int z = 0; z < boardLength; z++) {
                     Block block = arenaWorld.getBlockAt(startX + x, startY, startZ + z);
 
-                    // 2x2 패턴 구현
-                    // (x/2) + (z/2)의 합이 짝수면 흰색, 홀수면 검은색을 사용
+                    // 4x4 패턴 구현
+                    // (x/4) + (z/4)의 합이 짝수면 흰색, 홀수면 검은색을 사용
                     // 이렇게 하면 2x2 격자가 교차하는 패턴이 생성됩니다.
 
-                    if ( ((x / 2) + (z / 2)) % 2 == 0 ) {
+                    if ( ((x / 4) + (z / 4)) % 2 == 0 ) {
                         // 합이 짝수: 흰색 양털
                         block.setType(Material.WHITE_WOOL);
                     } else {

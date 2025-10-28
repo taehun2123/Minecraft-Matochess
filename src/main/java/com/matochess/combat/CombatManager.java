@@ -122,13 +122,42 @@ public class CombatManager {
 
     /**
      * Calculate damage for a unit attack
+     * 물리 공격은 방어력(Armor), 마법 공격은 마법 저항력(Magic Resist)에 영향받음
      */
     public double calculateDamage(Unit attacker, Unit defender) {
         double baseDamage = attacker.getAttackDamage();
-        double armor = defender.getArmor();
+        double resistance;
 
-        // Simple damage formula: damage * (100 / (100 + armor))
-        double damageMultiplier = 100.0 / (100.0 + armor);
+        // 공격 타입에 따라 방어력/마법저항력 선택
+        if (attacker.getAttackType() == com.matochess.data.AttackType.MAGICAL) {
+            resistance = defender.getMagicResist();
+        } else { // PHYSICAL
+            resistance = defender.getArmor();
+        }
+
+        // Simple damage formula: damage * (100 / (100 + resistance))
+        double damageMultiplier = 100.0 / (100.0 + resistance);
+        return baseDamage * damageMultiplier;
+    }
+
+    /**
+     * Calculate skill damage
+     * 스킬 데미지 = 기본 공격력 * 스킬 배율
+     */
+    public double calculateSkillDamage(Unit attacker, Unit defender, double skillMultiplier) {
+        double baseDamage = attacker.getAttackDamage() * skillMultiplier;
+        double resistance;
+
+        // 스킬은 항상 마법 공격 타입으로 계산 (변경 가능)
+        if (attacker.getAttackType() == com.matochess.data.AttackType.MAGICAL) {
+            resistance = defender.getMagicResist();
+        } else {
+            // 물리 유닛의 스킬도 방어력 무시하고 마법 저항력에 영향받도록 설정
+            // (게임 디자인에 따라 변경 가능)
+            resistance = defender.getMagicResist();
+        }
+
+        double damageMultiplier = 100.0 / (100.0 + resistance);
         return baseDamage * damageMultiplier;
     }
 

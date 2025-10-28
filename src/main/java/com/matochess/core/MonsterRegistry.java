@@ -53,9 +53,7 @@ public class MonsterRegistry {
                     createMonster("pve_wither_skeleton", "§8위더 스켈레톤", EntityType.WITHER_SKELETON,
                         320, 55, 0.8, 25, 15, UnitTier.TWO_STAR, UnitTrait.NETHER, UnitTrait.WARRIOR),
                     createMonster("pve_hoglin_rider", "§c호글린 기수", EntityType.HOGLIN,
-                        400, 45, 0.7, 30, 20, UnitTier.TWO_STAR, UnitTrait.NETHER, UnitTrait.TANK),
-                    createMonster("pve_blaze_lord", "§e블레이즈 로드", EntityType.BLAZE,
-                        250, 60, 1.2, 15, 10, UnitTier.TWO_STAR, UnitTrait.NETHER, UnitTrait.MAGE)
+                        400, 45, 0.7, 30, 20, UnitTier.TWO_STAR, UnitTrait.NETHER, UnitTrait.TANK)
                 )
             )
         ));
@@ -72,8 +70,6 @@ public class MonsterRegistry {
                         500, 70, 0.8, 40, 35, UnitTier.THREE_STAR, UnitTrait.CONSTRUCT, UnitTrait.WARRIOR),
                     createMonster("pve_pillager_elite", "§9약탈자 정예", EntityType.PILLAGER,
                         420, 65, 1.1, 30, 25, UnitTier.THREE_STAR, UnitTrait.CONSTRUCT, UnitTrait.RANGER),
-                    createMonster("pve_ravager_beast", "§4파괴수", EntityType.RAVAGER,
-                        600, 60, 0.5, 60, 40, UnitTier.THREE_STAR, UnitTrait.CONSTRUCT, UnitTrait.TANK),
                     createMonster("pve_vex_swarm", "§7벡스 무리", EntityType.VEX,
                         300, 50, 1.5, 15, 20, UnitTier.THREE_STAR, UnitTrait.CONSTRUCT, UnitTrait.ASSASSIN)
                 )
@@ -90,8 +86,6 @@ public class MonsterRegistry {
                         600, 70, 1.0, 50, 45, UnitTier.THREE_STAR, UnitTrait.OCEAN, UnitTrait.MAGE),
                     createMonster("pve_warden", "§0워든", EntityType.WARDEN,
                         1200, 120, 0.5, 90, 70, UnitTier.FIVE_STAR, UnitTrait.CONSTRUCT, UnitTrait.TANK),
-                    createMonster("pve_guardian_elite", "§3가디언 정예", EntityType.GUARDIAN,
-                        600, 70, 1.0, 50, 45, UnitTier.THREE_STAR, UnitTrait.OCEAN, UnitTrait.MAGE),
                     createMonster("pve_elder_guardian", "§b엘더 가디언", EntityType.ELDER_GUARDIAN,
                         900, 90, 0.6, 70, 60, UnitTier.FOUR_STAR, UnitTrait.OCEAN, UnitTrait.TANK)
                 )

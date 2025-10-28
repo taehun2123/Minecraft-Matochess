@@ -34,9 +34,30 @@ public class CombatInstance {
     private final Map<UUID, LivingEntity> team1Entities; // Blue team
     private final Map<UUID, LivingEntity> team2Entities; // Red team
 
+    // DOT (Damage Over Time) 관리
+    private final Map<LivingEntity, DotEffect> dotEffects; // 지속 피해 효과
+
+    // CC (Crowd Control) 관리
+    private final Map<LivingEntity, Integer> stunnedEntities; // 스턴 효과 (틱 카운트)
+
     private BukkitTask combatTask;
     private boolean isFinished;
     private int tickCount;
+
+    /**
+     * DOT 효과 데이터 클래스
+     */
+    private static class DotEffect {
+        final double damagePerTick;
+        final int remainingTicks;
+        final String effectName;
+
+        DotEffect(double damagePerTick, int remainingTicks, String effectName) {
+            this.damagePerTick = damagePerTick;
+            this.remainingTicks = remainingTicks;
+            this.effectName = effectName;
+        }
+    }
 
     /**
      * Constructor for PVP combat
@@ -56,6 +77,8 @@ public class CombatInstance {
         this.entityToUnit = new HashMap<>();
         this.team1Entities = new HashMap<>();
         this.team2Entities = new HashMap<>();
+        this.dotEffects = new HashMap<>();
+        this.stunnedEntities = new HashMap<>();
     }
 
     /**
@@ -76,6 +99,8 @@ public class CombatInstance {
         this.entityToUnit = new HashMap<>();
         this.team1Entities = new HashMap<>();
         this.team2Entities = new HashMap<>();
+        this.dotEffects = new HashMap<>();
+        this.stunnedEntities = new HashMap<>();
     }
 
     /**
@@ -415,6 +440,12 @@ public class CombatInstance {
 
         tickCount++;
 
+        // Process DOT effects
+        processDotEffects();
+
+        // Process CC effects
+        processCCEffects();
+
         // Remove dead entities
         removeDeadEntities();
 
@@ -426,6 +457,105 @@ public class CombatInstance {
 
         // Perform combat AI for each entity
         performCombatAI();
+    }
+
+    /**
+     * Process DOT (Damage Over Time) effects
+     */
+    private void processDotEffects() {
+        List<LivingEntity> toRemove = new ArrayList<>();
+
+        for (Map.Entry<LivingEntity, DotEffect> entry : new HashMap<>(dotEffects).entrySet()) {
+            LivingEntity entity = entry.getKey();
+            DotEffect dot = entry.getValue();
+
+            if (entity == null || entity.isDead()) {
+                toRemove.add(entity);
+                continue;
+            }
+
+            // Apply DOT damage
+            double newHealth = entity.getHealth() - dot.damagePerTick;
+            if (newHealth <= 0) {
+                entity.setHealth(0);
+                entity.getWorld().spawnParticle(org.bukkit.Particle.SMOKE_LARGE,
+                    entity.getLocation().add(0, 1, 0), 15, 0.3, 0.5, 0.3, 0.05);
+                entity.remove();
+                toRemove.add(entity);
+            } else {
+                entity.setHealth(newHealth);
+
+                // DOT 파티클 (독=초록, 화상=빨강, 위더=검정)
+                org.bukkit.Particle particle = org.bukkit.Particle.VILLAGER_ANGRY;
+                if (dot.effectName.contains("독") || dot.effectName.contains("poison")) {
+                    particle = org.bukkit.Particle.SLIME;
+                } else if (dot.effectName.contains("화염") || dot.effectName.contains("fire")) {
+                    particle = org.bukkit.Particle.FLAME;
+                } else if (dot.effectName.contains("위더") || dot.effectName.contains("wither")) {
+                    particle = org.bukkit.Particle.SMOKE_LARGE;
+                }
+
+                entity.getWorld().spawnParticle(particle,
+                    entity.getLocation().add(0, 1, 0), 3, 0.2, 0.3, 0.2, 0);
+
+                // Update health bar
+                Unit unit = entityToUnit.get(entity);
+                if (unit != null) {
+                    boolean isBlueTeam = team1Entities.containsValue(entity);
+                    boardManager.updateHealthBar(entity, unit, isBlueTeam);
+                }
+            }
+
+            // Decrease remaining ticks
+            int newTicks = dot.remainingTicks - 1;
+            if (newTicks <= 0) {
+                toRemove.add(entity);
+            } else {
+                dotEffects.put(entity, new DotEffect(dot.damagePerTick, newTicks, dot.effectName));
+            }
+        }
+
+        // Remove expired effects
+        for (LivingEntity entity : toRemove) {
+            dotEffects.remove(entity);
+        }
+    }
+
+    /**
+     * Process CC (Crowd Control) effects
+     */
+    private void processCCEffects() {
+        List<LivingEntity> toRemove = new ArrayList<>();
+
+        for (Map.Entry<LivingEntity, Integer> entry : new HashMap<>(stunnedEntities).entrySet()) {
+            LivingEntity entity = entry.getKey();
+            int remainingTicks = entry.getValue();
+
+            if (entity == null || entity.isDead()) {
+                toRemove.add(entity);
+                continue;
+            }
+
+            // 스턴 파티클
+            entity.getWorld().spawnParticle(org.bukkit.Particle.CRIT,
+                entity.getLocation().add(0, 2, 0), 5, 0.3, 0.3, 0.3, 0);
+
+            // Decrease remaining ticks
+            remainingTicks--;
+            if (remainingTicks <= 0) {
+                toRemove.add(entity);
+                // 스턴 해제 이펙트
+                entity.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_NORMAL,
+                    entity.getLocation().add(0, 1, 0), 10, 0.3, 0.3, 0.3, 0.05);
+            } else {
+                stunnedEntities.put(entity, remainingTicks);
+            }
+        }
+
+        // Remove expired effects
+        for (LivingEntity entity : toRemove) {
+            stunnedEntities.remove(entity);
+        }
     }
 
     /**
@@ -465,6 +595,11 @@ public class CombatInstance {
             return;
         }
 
+        // 스턴 상태 체크 - 스턴되어 있으면 행동 불가
+        if (stunnedEntities.containsKey(attacker)) {
+            return;
+        }
+
         // Find closest enemy
         LivingEntity target = findClosestEnemy(attacker, enemies);
         if (target == null) {
@@ -482,19 +617,46 @@ public class CombatInstance {
 
             // 중요: 현재 타겟이 적 팀인지 확인
             LivingEntity currentTarget = mob.getTarget();
-            if (currentTarget != null) {
-                // 같은 팀을 공격하고 있다면 타겟 해제
-                boolean attackerIsTeam1 = team1Entities.containsValue(attacker);
-                boolean targetIsTeam1 = team1Entities.containsValue(currentTarget);
+            boolean needsNewTarget = false;
 
-                if (attackerIsTeam1 == targetIsTeam1) {
-                    // 같은 팀이면 타겟 해제
-                    mob.setTarget(null);
+            if (currentTarget != null) {
+                // 타겟이 죽었거나 같은 팀이면 새 타겟 필요
+                if (currentTarget.isDead()) {
+                    needsNewTarget = true;
+                } else {
+                    boolean attackerIsTeam1 = team1Entities.containsValue(attacker);
+                    boolean targetIsTeam1 = team1Entities.containsValue(currentTarget);
+
+                    if (attackerIsTeam1 == targetIsTeam1) {
+                        // 같은 팀이면 타겟 해제하고 새 타겟 필요
+                        mob.setTarget(null);
+                        needsNewTarget = true;
+                    }
+                }
+            } else {
+                // 타겟이 없으면 새 타겟 필요
+                needsNewTarget = true;
+            }
+
+            // 새 타겟이 필요하거나 더 가까운 적이 있으면 타겟 재설정
+            if (needsNewTarget || currentTarget != target) {
+                mob.setTarget(target);
+
+                // 타겟 설정 강제 (AI가 확실히 인식하도록)
+                if (mob.getTarget() == null || mob.getTarget().isDead()) {
+                    // 타겟이 제대로 설정되지 않았다면 재시도
+                    Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                        if (!mob.isDead() && !target.isDead()) {
+                            mob.setTarget(target);
+                        }
+                    }, 1L);
                 }
             }
 
-            // 적 팀의 타겟 설정
-            mob.setTarget(target);
+            // Follow Range를 매우 크게 설정 (타겟을 절대 놓치지 않도록)
+            if (attacker.getAttribute(Attribute.GENERIC_FOLLOW_RANGE) != null) {
+                attacker.getAttribute(Attribute.GENERIC_FOLLOW_RANGE).setBaseValue(128.0);
+            }
 
             // 이동 속도 설정 (attackSpeed 기반, 최소 속도 보장)
             double speedMultiplier = Math.min(attackerUnit.getAttackSpeed() / 100.0, 2.0); // 최대 2배속
@@ -519,6 +681,12 @@ public class CombatInstance {
 
         // 공격 범위 내에 있으면 공격
         if (distance <= attackRange) {
+            // 스킬 발동 체크 (마나 100 이상)
+            if (attackerUnit.canCastSkill()) {
+                castSkill(attacker, attackerUnit, target, targetUnit, enemies);
+                return;
+            }
+
             // 크리퍼 특수 처리: 폭발 공격 (광역 데미지, 자신은 체력 소모 없음)
             if (attacker instanceof org.bukkit.entity.Creeper) {
                 handleCreeperExplosion(attacker, attackerUnit, enemies);
@@ -574,6 +742,9 @@ public class CombatInstance {
                     org.bukkit.Sound.ENTITY_PLAYER_HURT, 0.4f, 1.0f);
             }
 
+            // 공격 성공 시 마나 증가
+            attackerUnit.addMana(attackerUnit.getManaPerAttack());
+
             // Attack particles
             attacker.getWorld().spawnParticle(org.bukkit.Particle.SWEEP_ATTACK,
                 attacker.getLocation().add(0, 1, 0), 1);
@@ -622,6 +793,377 @@ public class CombatInstance {
         }
 
         return closest;
+    }
+
+    /**
+     * Cast a unit's skill
+     */
+    private void castSkill(LivingEntity attacker, Unit attackerUnit, LivingEntity target, Unit targetUnit, Map<UUID, LivingEntity> enemies) {
+        com.matochess.data.UnitSkill skill = attackerUnit.getSkill();
+        if (skill == null) {
+            return;
+        }
+
+        // 마나 소모 및 초기화
+        attackerUnit.resetMana();
+
+        // 스킬 발동 이펙트
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.SPELL_WITCH,
+            attacker.getLocation().add(0, 1, 0), 30, 0.5, 0.5, 0.5, 0.1);
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.ENCHANTMENT_TABLE,
+            attacker.getLocation().add(0, 2, 0), 20, 0.5, 1.0, 0.5, 0.5);
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_EVOKER_CAST_SPELL, 1.0f, 1.2f);
+
+        // 스킬 타입에 따라 처리
+        switch (skill.getType()) {
+            case DAMAGE:
+            case BACKSTAB:
+                // 단일 대상 스킬 데미지
+                handleSingleTargetSkill(attacker, attackerUnit, target, targetUnit, skill);
+                break;
+
+            case AOE_DAMAGE:
+                // 광역 스킬 데미지
+                handleAOESkill(attacker, attackerUnit, enemies, skill);
+                break;
+
+            case BUFF:
+                // 자신 강화
+                handleBuffSkill(attacker, attackerUnit, skill);
+                break;
+
+            case DEBUFF:
+                // 적 약화
+                handleDebuffSkill(attacker, enemies, skill);
+                break;
+
+            case HEAL:
+                // 아군 힐
+                handleHealSkill(attacker, attackerUnit, skill);
+                break;
+
+            case SUMMON:
+                // 소환 스킬
+                handleSummonSkill(attacker, attackerUnit, skill);
+                break;
+
+            case TELEPORT:
+                // 순간이동 후 공격
+                handleTeleportSkill(attacker, attackerUnit, enemies, skill);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    /**
+     * Handle summon skill
+     */
+    private void handleSummonSkill(LivingEntity attacker, Unit attackerUnit, com.matochess.data.UnitSkill skill) {
+        // 소환 이펙트
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.PORTAL,
+            attacker.getLocation().add(0, 1, 0), 50, 0.5, 1.0, 0.5, 0.5);
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_EVOKER_PREPARE_SUMMON, 1.2f, 1.0f);
+
+        // 소환된 유닛은 임시로 작은 vex 생성 (3마리)
+        Location summonLoc = attacker.getLocation();
+        boolean isTeam1 = team1Entities.containsValue(attacker);
+        Map<UUID, LivingEntity> summonerTeam = isTeam1 ? team1Entities : team2Entities;
+
+        for (int i = 0; i < 3; i++) {
+            // 소환 위치 (소환사 주변)
+            double angle = (i * 120) * Math.PI / 180.0;
+            Location spawnLoc = summonLoc.clone().add(
+                Math.cos(angle) * 2,
+                0,
+                Math.sin(angle) * 2
+            );
+
+            // Vex 소환
+            org.bukkit.entity.Vex vex = (org.bukkit.entity.Vex) summonLoc.getWorld().spawnEntity(
+                spawnLoc, org.bukkit.entity.EntityType.VEX);
+
+            // 소환된 유닛 설정
+            vex.setCustomName("§e소환된 정령");
+            vex.setCustomNameVisible(true);
+            vex.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH).setBaseValue(50);
+            vex.setHealth(50);
+
+            // 팀에 추가
+            summonerTeam.put(UUID.randomUUID(), vex);
+
+            // 소환 파티클
+            vex.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_NORMAL,
+                vex.getLocation().add(0, 1, 0), 10, 0.3, 0.3, 0.3, 0.05);
+        }
+
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_EVOKER_PREPARE_ATTACK, 1.0f, 1.5f);
+    }
+
+    /**
+     * Handle teleport skill (backstab)
+     */
+    private void handleTeleportSkill(LivingEntity attacker, Unit attackerUnit, Map<UUID, LivingEntity> enemies, com.matochess.data.UnitSkill skill) {
+        // 후방의 적 찾기 (체력이 가장 낮은 적)
+        LivingEntity backlineTarget = null;
+        double lowestHealth = Double.MAX_VALUE;
+
+        for (LivingEntity enemy : enemies.values()) {
+            if (enemy != null && !enemy.isDead()) {
+                if (enemy.getHealth() < lowestHealth) {
+                    lowestHealth = enemy.getHealth();
+                    backlineTarget = enemy;
+                }
+            }
+        }
+
+        if (backlineTarget == null) {
+            return;
+        }
+
+        // 텔레포트 전 위치에 파티클
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.PORTAL,
+            attacker.getLocation().add(0, 1, 0), 30, 0.3, 0.5, 0.3, 0.1);
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 1.2f);
+
+        // 적 뒤로 텔레포트
+        Location targetLoc = backlineTarget.getLocation();
+        Location teleportLoc = targetLoc.clone().add(
+            targetLoc.getDirection().multiply(-2)
+        );
+        teleportLoc.setY(targetLoc.getY());
+        attacker.teleport(teleportLoc);
+
+        // 텔레포트 후 파티클
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.PORTAL,
+            attacker.getLocation().add(0, 1, 0), 30, 0.3, 0.5, 0.3, 0.1);
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_ENDERMAN_TELEPORT, 1.0f, 0.8f);
+
+        // 암살 데미지
+        Unit targetUnit = entityToUnit.get(backlineTarget);
+        if (targetUnit != null) {
+            double skillDamage = plugin.getCombatManager().calculateSkillDamage(
+                attackerUnit, targetUnit, skill.getDamageMultiplier());
+
+            double newHealth = backlineTarget.getHealth() - skillDamage;
+            if (newHealth <= 0) {
+                backlineTarget.setHealth(0);
+                backlineTarget.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_LARGE,
+                    backlineTarget.getLocation().add(0, 1, 0), 1);
+                backlineTarget.remove();
+            } else {
+                backlineTarget.setHealth(newHealth);
+
+                // 체력바 업데이트
+                boolean isBlueTeam = team1Entities.containsValue(backlineTarget);
+                boardManager.updateHealthBar(backlineTarget, targetUnit, isBlueTeam);
+            }
+
+            // 암살 이펙트
+            backlineTarget.getWorld().spawnParticle(org.bukkit.Particle.SWEEP_ATTACK,
+                backlineTarget.getLocation().add(0, 1, 0), 5, 0.3, 0.5, 0.3, 0);
+            backlineTarget.getWorld().playSound(backlineTarget.getLocation(),
+                org.bukkit.Sound.ENTITY_PLAYER_ATTACK_CRIT, 1.0f, 0.8f);
+        }
+    }
+
+    /**
+     * Handle single target skill
+     */
+    private void handleSingleTargetSkill(LivingEntity attacker, Unit attackerUnit, LivingEntity target, Unit targetUnit, com.matochess.data.UnitSkill skill) {
+        double skillDamage = plugin.getCombatManager().calculateSkillDamage(attackerUnit, targetUnit, skill.getDamageMultiplier());
+
+        // 스킬 데미지 적용
+        double newHealth = target.getHealth() - skillDamage;
+        if (newHealth <= 0) {
+            target.setHealth(0);
+            target.getWorld().spawnParticle(org.bukkit.Particle.EXPLOSION_LARGE,
+                target.getLocation().add(0, 1, 0), 1);
+            target.remove();
+        } else {
+            target.setHealth(newHealth);
+
+            // 체력바 업데이트
+            boolean isBlueTeam = team1Entities.containsValue(target);
+            boardManager.updateHealthBar(target, targetUnit, isBlueTeam);
+
+            // DOT 효과 적용
+            if (skill.appliesDot()) {
+                double dotDamage = skillDamage * 0.2; // 스킬 데미지의 20%를 지속 피해로
+                dotEffects.put(target, new DotEffect(dotDamage, 6, skill.getName())); // 3초간 지속 (6틱)
+
+                // DOT 시작 이펙트
+                target.getWorld().spawnParticle(org.bukkit.Particle.DRIP_LAVA,
+                    target.getLocation().add(0, 2, 0), 10, 0.3, 0.5, 0.3, 0);
+            }
+
+            // 스턴 효과 적용
+            if (skill.appliesStun()) {
+                stunnedEntities.put(target, 4); // 2초간 스턴 (4틱)
+
+                // 스턴 시작 이펙트
+                target.getWorld().spawnParticle(org.bukkit.Particle.CRIT,
+                    target.getLocation().add(0, 2, 0), 15, 0.3, 0.5, 0.3, 0);
+                target.getWorld().playSound(target.getLocation(),
+                    org.bukkit.Sound.ENTITY_IRON_GOLEM_HURT, 1.0f, 1.5f);
+            }
+        }
+
+        // 스킬 히트 이펙트
+        target.getWorld().spawnParticle(org.bukkit.Particle.CRIT_MAGIC,
+            target.getLocation().add(0, 1, 0), 15, 0.3, 0.5, 0.3, 0.1);
+        target.getWorld().playSound(target.getLocation(),
+            org.bukkit.Sound.ENTITY_GENERIC_EXPLODE, 0.8f, 1.5f);
+    }
+
+    /**
+     * Handle AOE skill
+     */
+    private void handleAOESkill(LivingEntity attacker, Unit attackerUnit, Map<UUID, LivingEntity> enemies, com.matochess.data.UnitSkill skill) {
+        Location center = attacker.getLocation();
+        double radius = skill.getEffectRadius();
+        int hitCount = 0;
+        int maxTargets = skill.getMaxTargets();
+
+        // 광역 이펙트
+        for (int i = 0; i < 360; i += 30) {
+            double radian = Math.toRadians(i);
+            Location particleLoc = center.clone().add(
+                Math.cos(radian) * radius,
+                0.5,
+                Math.sin(radian) * radius
+            );
+            attacker.getWorld().spawnParticle(org.bukkit.Particle.FLAME,
+                particleLoc, 3, 0.1, 0.1, 0.1, 0.02);
+        }
+
+        // 범위 내 적들에게 데미지
+        for (LivingEntity enemy : enemies.values()) {
+            if (enemy != null && !enemy.isDead() && hitCount < maxTargets) {
+                double distance = enemy.getLocation().distance(center);
+                if (distance <= radius) {
+                    Unit enemyUnit = entityToUnit.get(enemy);
+                    if (enemyUnit != null) {
+                        double skillDamage = plugin.getCombatManager().calculateSkillDamage(attackerUnit, enemyUnit, skill.getDamageMultiplier());
+
+                        double newHealth = enemy.getHealth() - skillDamage;
+                        if (newHealth <= 0) {
+                            enemy.setHealth(0);
+                            enemy.remove();
+                        } else {
+                            enemy.setHealth(newHealth);
+
+                            // 체력바 업데이트
+                            boolean isBlueTeam = team1Entities.containsValue(enemy);
+                            boardManager.updateHealthBar(enemy, enemyUnit, isBlueTeam);
+                        }
+
+                        // 히트 이펙트
+                        enemy.getWorld().spawnParticle(org.bukkit.Particle.LAVA,
+                            enemy.getLocation().add(0, 1, 0), 10, 0.3, 0.5, 0.3, 0);
+
+                        // DOT 효과 적용
+                        if (skill.appliesDot()) {
+                            double dotDamage = skillDamage * 0.15; // AOE는 DOT 15%
+                            dotEffects.put(enemy, new DotEffect(dotDamage, 6, skill.getName()));
+                        }
+
+                        // 스턴 효과 적용
+                        if (skill.appliesStun()) {
+                            stunnedEntities.put(enemy, 3); // AOE는 1.5초 스턴 (3틱)
+
+                            // 스턴 이펙트
+                            enemy.getWorld().spawnParticle(org.bukkit.Particle.CRIT,
+                                enemy.getLocation().add(0, 2, 0), 10, 0.3, 0.5, 0.3, 0);
+                        }
+
+                        hitCount++;
+                    }
+                }
+            }
+        }
+
+        // 광역 사운드
+        attacker.getWorld().playSound(center, org.bukkit.Sound.ENTITY_GENERIC_EXPLODE, 1.2f, 0.8f);
+    }
+
+    /**
+     * Handle buff skill
+     */
+    private void handleBuffSkill(LivingEntity attacker, Unit attackerUnit, com.matochess.data.UnitSkill skill) {
+        // 공격력 및 공격속도 증가 (임시)
+        attackerUnit.setAttackDamage(attackerUnit.getAttackDamage() * skill.getDamageMultiplier());
+        attackerUnit.setAttackSpeed(attackerUnit.getAttackSpeed() * 1.5);
+
+        // 버프 이펙트
+        attacker.getWorld().spawnParticle(org.bukkit.Particle.VILLAGER_HAPPY,
+            attacker.getLocation().add(0, 2, 0), 20, 0.5, 0.5, 0.5, 0);
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
+    }
+
+    /**
+     * Handle debuff skill
+     */
+    private void handleDebuffSkill(LivingEntity attacker, Map<UUID, LivingEntity> enemies, com.matochess.data.UnitSkill skill) {
+        int hitCount = 0;
+        int maxTargets = skill.getMaxTargets();
+
+        for (LivingEntity enemy : enemies.values()) {
+            if (enemy != null && !enemy.isDead() && hitCount < maxTargets) {
+                Unit enemyUnit = entityToUnit.get(enemy);
+                if (enemyUnit != null) {
+                    // 공격력 및 방어력 감소 (임시)
+                    enemyUnit.setAttackDamage(enemyUnit.getAttackDamage() * 0.7);
+                    enemyUnit.setArmor(enemyUnit.getArmor() * 0.7);
+
+                    // 디버프 이펙트
+                    enemy.getWorld().spawnParticle(org.bukkit.Particle.SMOKE_NORMAL,
+                        enemy.getLocation().add(0, 1, 0), 15, 0.3, 0.5, 0.3, 0.05);
+
+                    hitCount++;
+                }
+            }
+        }
+
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.ENTITY_WITCH_AMBIENT, 1.0f, 0.8f);
+    }
+
+    /**
+     * Handle heal skill
+     */
+    private void handleHealSkill(LivingEntity attacker, Unit attackerUnit, com.matochess.data.UnitSkill skill) {
+        // 아군 찾기 (같은 팀)
+        Map<UUID, LivingEntity> allies = team1Entities.containsValue(attacker) ? team1Entities : team2Entities;
+
+        for (LivingEntity ally : allies.values()) {
+            if (ally != null && !ally.isDead()) {
+                Unit allyUnit = entityToUnit.get(ally);
+                if (allyUnit != null) {
+                    double healAmount = attackerUnit.getAttackDamage() * skill.getDamageMultiplier();
+                    double newHealth = Math.min(ally.getHealth() + healAmount, ally.getMaxHealth());
+                    ally.setHealth(newHealth);
+
+                    // 체력바 업데이트
+                    boolean isBlueTeam = team1Entities.containsValue(ally);
+                    boardManager.updateHealthBar(ally, allyUnit, isBlueTeam);
+
+                    // 힐 이펙트
+                    ally.getWorld().spawnParticle(org.bukkit.Particle.HEART,
+                        ally.getLocation().add(0, 2, 0), 5, 0.5, 0.5, 0.5, 0);
+                }
+            }
+        }
+
+        attacker.getWorld().playSound(attacker.getLocation(),
+            org.bukkit.Sound.BLOCK_ENCHANTMENT_TABLE_USE, 1.0f, 1.5f);
     }
 
     /**

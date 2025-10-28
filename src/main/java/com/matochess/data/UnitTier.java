@@ -9,9 +9,9 @@ import org.bukkit.ChatColor;
 public enum UnitTier {
     ONE_STAR(1, ChatColor.GRAY, "1", 1),
     TWO_STAR(2, ChatColor.GREEN, "2", 2),
-    THREE_STAR(3, ChatColor.BLUE, "3", 4),
-    FOUR_STAR(4, ChatColor.DARK_PURPLE, "4", 8),
-    FIVE_STAR(5, ChatColor.GOLD, "5", 16);
+    THREE_STAR(3, ChatColor.BLUE, "3", 3),
+    FOUR_STAR(4, ChatColor.DARK_PURPLE, "4", 4),
+    FIVE_STAR(5, ChatColor.GOLD, "5", 5);
 
     private final int tier;
     private final ChatColor color;

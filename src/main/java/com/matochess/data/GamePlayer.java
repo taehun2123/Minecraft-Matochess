@@ -230,8 +230,27 @@ public class GamePlayer {
         int upgraded = 0;
         for (List<Unit> units : unitsByIdAndLevel.values()) {
             while (units.size() >= 3) {
-                // Remove 3 units and create 1 upgraded unit
-                Unit base = units.remove(0);
+                // 우선순위: 보드에 있는 유닛을 base로 선택 (업그레이드 후 보드에 유지하기 위해)
+                Unit base = null;
+                Position basePos = null;
+
+                // 보드에 있는 유닛을 먼저 찾아서 base로 설정
+                for (Unit unit : units) {
+                    Position pos = findUnitPosition(unit);
+                    if (pos != null) {
+                        base = unit;
+                        basePos = pos;
+                        break;
+                    }
+                }
+
+                // 보드에 유닛이 없으면 첫 번째 유닛(벤치)을 base로
+                if (base == null) {
+                    base = units.get(0);
+                }
+
+                // base를 제외한 나머지 2개 선택
+                units.remove(base);
                 Unit second = units.remove(0);
                 Unit third = units.remove(0);
 
@@ -241,18 +260,28 @@ public class GamePlayer {
                 allEquipment.addAll(second.removeAllEquipment());
                 allEquipment.addAll(third.removeAllEquipment());
 
-                // 벤치와 보드에서 제거
+                // second와 third를 벤치와 보드에서 제거
                 bench.remove(second);
                 bench.remove(third);
 
-                // 보드에서도 제거
                 Position secondPos = findUnitPosition(second);
                 Position thirdPos = findUnitPosition(third);
                 if (secondPos != null) board.remove(secondPos);
                 if (thirdPos != null) board.remove(thirdPos);
 
+                // base가 벤치에 있으면 제거 (보드에 있으면 그대로 유지)
+                if (basePos == null) {
+                    bench.remove(base);
+                }
+
                 // Upgrade base unit
                 if (base.upgrade()) {
+                    // base가 벤치에 있었다면 다시 벤치에 추가
+                    if (basePos == null) {
+                        bench.add(base);
+                    }
+                    // base가 보드에 있었다면 이미 board에 남아있음 (위치 유지)
+
                     // Re-add equipment (up to max)
                     for (Equipment eq : allEquipment) {
                         if (!base.addEquipment(eq)) {
@@ -263,8 +292,9 @@ public class GamePlayer {
 
                     // 플레이어에게 알림
                     if (player != null && player.isOnline()) {
+                        String locationMsg = basePos != null ? " §7(보드 유지)" : " §7(벤치)";
                         player.sendMessage("§a§l✦ 자동 합성! §r§e" + base.getName() + " §7→ §6" +
-                                         base.getLevel().getDisplay() + " " + base.getName());
+                                         base.getLevel().getDisplay() + " " + base.getName() + locationMsg);
                         player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
                     }
                 }
@@ -349,12 +379,14 @@ public class GamePlayer {
         List<Equipment> equipment = unit.removeAllEquipment();
         equipmentStorage.addAll(equipment);
 
-        // Calculate sell price (full cost for tier 1, increases with level)
-        int sellPrice = unit.getCost();
-        if (unit.getLevel() != UnitLevel.ONE) {
-            // Higher level units sell for more
-            sellPrice = unit.getCost() * (unit.getLevel().getLevel());
-        }
+        // Calculate sell price based on all units used in upgrades
+        // 1성 = cost * 1 (유닛 1개)
+        // 2성 = cost * 3 (유닛 3개 합성)
+        // 3성 = cost * 9 (2성 3개 합성 = 유닛 9개)
+        // 공식: cost * (3^(level-1))
+        int level = unit.getLevel().getLevel();
+        int unitsUsed = (int) Math.pow(3, level - 1);
+        int sellPrice = unit.getCost() * unitsUsed;
 
         addGold(sellPrice);
         return sellPrice;
