@@ -1,24 +1,31 @@
 package com.matochess.gui;
 
 import com.matochess.MatoChessPlugin;
+import com.matochess.core.SynergyManager;
 import com.matochess.data.GamePlayer;
 import com.matochess.data.Position;
+import com.matochess.data.TraitBonus;
 import com.matochess.data.Unit;
+import com.matochess.data.UnitTrait;
+import com.matochess.game.GameInstance;
 import com.matochess.game.ShopManager;
 import com.matochess.utils.NBTUtils;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
 
 import java.util.*;
 
 /**
- * 새로운 인벤토리 기반 GUI 시스템
+ * 54칸 통합 GUI를 구성/갱신하는 관리자입니다.
+ * 상점, 벤치, 배치판과 같은 전반적인 인벤토리 UI 및 상호작용 로직을 유지합니다.
  */
 public class InventoryGUIManager {
 
@@ -36,6 +43,7 @@ public class InventoryGUIManager {
 
     // 판매를 위해 선택된 유닛 추적
     private final Map<UUID, Unit> selectedUnitsForSale; // 플레이어 -> 판매할 유닛
+    private final Set<UUID> lockedShops; // 잠금된 상점
 
     // 54칸 통합 GUI 슬롯 상수
     // 1~8칸, 10~17칸, 19~26칸: 배치판 (8x3 = 24칸)
@@ -55,9 +63,12 @@ public class InventoryGUIManager {
     // 36칸: 레벨/경험치 정보
     private static final int INFO_LEVEL_SLOT = 35;
 
-    // 37~45칸: 검정 유리판 (필러)
+    // 37~44칸: 검정 유리판 (필러)
     private static final int FILLER_START = 36;
-    private static final int FILLER_END = 44;
+    private static final int FILLER_END = 43;
+
+    // 45칸: 항복
+    private static final int BUTTON_SURRENDER_SLOT = 44;
 
     // 46칸: 경험치 업
     private static final int BUTTON_XP_SLOT = 45;
@@ -82,6 +93,7 @@ public class InventoryGUIManager {
         this.spectatingPlayers = new HashMap<>();
         this.selectedUnits = new HashMap<>();
         this.selectedUnitsForSale = new HashMap<>();
+        this.lockedShops = new HashSet<>();
     }
 
     /**
@@ -98,7 +110,16 @@ public class InventoryGUIManager {
      * 플레이어 상점 리셋 (새 라운드 시작 시)
      */
     public void resetPlayerShop(UUID playerId) {
-        playerShops.remove(playerId);
+        resetPlayerShop(playerId, false);
+    }
+
+    public void resetPlayerShop(UUID playerId, boolean force) {
+        if (force || !lockedShops.contains(playerId)) {
+            playerShops.remove(playerId);
+        }
+        if (force) {
+            lockedShops.remove(playerId);
+        }
     }
 
     /*
@@ -151,44 +172,89 @@ public class InventoryGUIManager {
         selectedUnitsForSale.remove(playerId);
     }
 
+    public boolean isShopLocked(UUID playerId) {
+        return lockedShops.contains(playerId);
+    }
+
+    public boolean toggleShopLock(UUID playerId) {
+        if (lockedShops.contains(playerId)) {
+            lockedShops.remove(playerId);
+            return false;
+        }
+        lockedShops.add(playerId);
+        return true;
+    }
+
     /**
      * 플레이어에게 메인 게임 54칸 통합 GUI 열기
      */
     public void setupGameInventory(Player player, GamePlayer gamePlayer) {
-        // 54칸 GUI 생성
         Inventory gui = Bukkit.createInventory(null, 54, "§6§l마토체스 - " + player.getName());
+        populateGameInventory(gui, gamePlayer, player);
+        player.openInventory(gui);
+    }
 
-        // 배치판 설정 (1~8, 10~17, 19~26칸)
-        setupBoardSlots(gui, gamePlayer);
+    /**
+     * 플레이어 인벤토리의 일반 슬롯(9~35번)에 장비 아이템을 추가 시도
+     */
+    public boolean tryAddEquipmentItemToInventory(Player player, ItemStack equipmentItem) {
+        if (player == null || equipmentItem == null) {
+            return false;
+        }
 
-        // 정보 패널 설정 (9, 18, 27칸)
-        setupInfoPanels(gui, gamePlayer);
+        ItemStack itemToInsert = equipmentItem.clone();
+        itemToInsert.setAmount(1);
 
-        // 벤치 설정 (28~35칸)
+        org.bukkit.inventory.PlayerInventory inventory = player.getInventory();
+        for (int slot = 9; slot <= 35; slot++) {
+            ItemStack existing = inventory.getItem(slot);
+            if (existing == null || existing.getType() == Material.AIR) {
+                inventory.setItem(slot, itemToInsert);
+                player.updateInventory();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void populateGameInventory(Inventory gui, GamePlayer gamePlayer, Player player) {
+        gui.clear();
+
+        List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
+        Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies =
+            plugin.getSynergyManager().calculateSynergies(boardUnits);
+
+        setupBoardSlots(gui, gamePlayer, activeSynergies);
+        setupInfoPanels(gui, gamePlayer, activeSynergies);
         setupBenchSlots(gui, gamePlayer);
-
-        // 레벨 정보 설정 (36칸)
         setupLevelInfo(gui, gamePlayer);
-
-        // 필러 설정 (37~45칸)
         setupFillers(gui);
-
-        // 버튼 설정 (46, 47, 54칸)
-        setupButtons(gui, gamePlayer);
-
-        // 상점 설정 (48~52칸)
+        setupButtons(gui, gamePlayer, player);
         setupShop(gui, gamePlayer, player);
 
-        // 빈 칸 (53칸)
         gui.setItem(EMPTY_SLOT, null);
+    }
 
-        player.openInventory(gui);
+    public void refreshGameInventory(Player player, GamePlayer gamePlayer) {
+        InventoryView view = player.getOpenInventory();
+        if (view != null) {
+            Inventory top = view.getTopInventory();
+            String title = view.getTitle();
+            if (top != null && top.getSize() == 54 &&
+                title != null && title.startsWith("§6§l마토체스")) {
+                populateGameInventory(top, gamePlayer, player);
+                player.updateInventory();
+                return;
+            }
+        }
+        setupGameInventory(player, gamePlayer);
     }
 
     /**
      * 배치판 슬롯 설정 (1~8, 10~17, 19~26칸)
      */
-    private void setupBoardSlots(Inventory gui, GamePlayer gamePlayer) {
+    private void setupBoardSlots(Inventory gui, GamePlayer gamePlayer,
+                                 Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies) {
         Map<Position, Unit> board = gamePlayer.getBoard();
 
         for (int i = 0; i < BOARD_SLOTS.length; i++) {
@@ -202,7 +268,8 @@ public class InventoryGUIManager {
             Unit unit = board.get(pos);
 
             if (unit != null) {
-                ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey());
+                NBTUtils.UnitDisplayStats stats = calculateDisplayStats(unit, activeSynergies);
+                ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey(), stats);
 
                 ItemMeta meta = unitItem.getItemMeta();
                 List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
@@ -231,7 +298,8 @@ public class InventoryGUIManager {
     /**
      * 정보 패널 설정 (9, 18, 27칸)
      */
-    private void setupInfoPanels(Inventory gui, GamePlayer gamePlayer) {
+    private void setupInfoPanels(Inventory gui, GamePlayer gamePlayer,
+                                 Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies) {
         // 9칸: 체력 정보
         ItemStack healthInfo = new ItemStack(Material.RED_STAINED_GLASS_PANE);
         ItemMeta healthMeta = healthInfo.getItemMeta();
@@ -253,14 +321,10 @@ public class InventoryGUIManager {
         synergyLore.add("§7현재 활성화된 시너지:");
 
         // 시너지 계산 및 표시
-        List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
-        Map<com.matochess.data.UnitTrait, com.matochess.core.SynergyManager.ActiveSynergy> activeSynergies =
-            plugin.getSynergyManager().calculateSynergies(boardUnits);
-
-        if (activeSynergies.isEmpty()) {
+        if (activeSynergies == null || activeSynergies.isEmpty()) {
             synergyLore.add("§8활성화된 시너지가 없습니다");
         } else {
-            for (com.matochess.core.SynergyManager.ActiveSynergy synergy : activeSynergies.values()) {
+            for (SynergyManager.ActiveSynergy synergy : activeSynergies.values()) {
                 synergyLore.add("§a✓ " + synergy.getDisplayString());
             }
         }
@@ -320,7 +384,7 @@ public class InventoryGUIManager {
         lore.add("");
 
         int xpCost = plugin.getConfig().getInt("game.xp-cost-gold", 4);
-        int xpGain = plugin.getConfig().getInt("game.xp-per-purchase", 2);
+        int xpGain = plugin.getConfig().getInt("game.xp-per-purchase", 4);
 
         lore.add("§e클릭 시:");
         lore.add("§7  - 경험치 §a+" + xpGain);
@@ -334,23 +398,51 @@ public class InventoryGUIManager {
         return item;
     }
 
+    private ItemStack createSurrenderButton() {
+        ItemStack item = new ItemStack(Material.REDSTONE_BLOCK);
+        ItemMeta meta = item.getItemMeta();
+
+        meta.setDisplayName("§c§l항복하기");
+
+        List<String> lore = new ArrayList<>();
+        lore.add("§7현재 게임에서 즉시 탈락합니다");
+        lore.add("§7상대는 승리 처리가 되며");
+        lore.add("§7남은 라운드는 관전하게 됩니다");
+        lore.add("");
+        lore.add("§e클릭 시: 항복");
+
+        meta.setLore(lore);
+        item.setItemMeta(meta);
+
+        return item;
+    }
+
     /**
      * 리롤 버튼 생성
      */
-    private ItemStack createRerollButton(GamePlayer gamePlayer) {
-        ItemStack item = new ItemStack(Material.SUNFLOWER);
+    private ItemStack createRerollButton(GamePlayer gamePlayer, UUID playerId) {
+        boolean locked = isShopLocked(playerId);
+
+        ItemStack item = new ItemStack(locked ? Material.IRON_BARS : Material.SUNFLOWER);
         ItemMeta meta = item.getItemMeta();
 
-        meta.setDisplayName("§6상점 새로고침");
+        meta.setDisplayName(locked ? "§c§l[잠금] §6상점 새로고침" : "§6상점 새로고침");
 
         List<String> lore = new ArrayList<>();
         int rerollCost = shopManager.getRerollCost();
 
         lore.add("§7상점 유닛을 새로 뽑습니다");
         lore.add("");
-        lore.add("§e클릭 시:");
+        lore.add("§e좌클릭:");
         lore.add("§7  - 상점 유닛 §a새로고침");
         lore.add("§7  - 골드 소모 §6-" + rerollCost + "G");
+        lore.add("");
+        lore.add("§b우클릭: §7상점 잠금/해제");
+        if (locked) {
+            lore.add("§c[잠금] 현재 상점이 고정되었습니다");
+        } else {
+            lore.add("§a현재 상태: 해제");
+        }
         lore.add("");
         lore.add("§7현재 골드: §6" + gamePlayer.getGold() + "G");
 
@@ -390,7 +482,8 @@ public class InventoryGUIManager {
             int slot = INV_BENCH_START + i;
             if (i < bench.size() && bench.get(i) != null) {
                 Unit unit = bench.get(i);
-                ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey());
+                NBTUtils.UnitDisplayStats stats = calculateDisplayStats(unit, Collections.emptyMap());
+                ItemStack unitItem = NBTUtils.createUnitItem(unit, plugin.getKey(), stats);
 
                 ItemMeta meta = unitItem.getItemMeta();
                 List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
@@ -414,6 +507,119 @@ public class InventoryGUIManager {
                 gui.setItem(slot, emptyBench);
             }
         }
+    }
+
+    /**
+     * 유닛의 최종 표시 스텟 계산 (장비 + 시너지 포함)
+     */
+    private NBTUtils.UnitDisplayStats calculateDisplayStats(Unit unit, Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies) {
+        double health = unit.getHealth();
+        double attackDamage = unit.getAttackDamage();
+        double attackSpeed = unit.getAttackSpeed();
+        double armor = unit.getArmor();
+        double magicResist = unit.getMagicResist();
+        double criticalChance = unit.getCriticalChance();
+        double criticalDamage = unit.getCriticalDamage();
+        double lifeSteal = unit.getLifeSteal();
+
+        List<String> extraLore = new ArrayList<>();
+
+        if (activeSynergies != null && !activeSynergies.isEmpty()) {
+            for (UnitTrait trait : unit.getTraits()) {
+                SynergyManager.ActiveSynergy synergy = activeSynergies.get(trait);
+                if (synergy == null) {
+                    continue;
+                }
+
+                TraitBonus bonus = synergy.getActiveBonus();
+                double value = bonus.getBonusValue();
+                String prefix = ChatColor.LIGHT_PURPLE + trait.getDisplayName() + ChatColor.GRAY + " ▶ ";
+
+                switch (bonus.getBonusType()) {
+                    case HEALTH_FLAT -> {
+                        health += value;
+                        extraLore.add(prefix + ChatColor.GREEN + "체력 +" + String.format("%.1f", value));
+                    }
+                    case HEALTH_PERCENT -> {
+                        double bonusValue = health * (value / 100.0);
+                        health += bonusValue;
+                        extraLore.add(prefix + ChatColor.GREEN + "체력 +" + String.format("%.1f", bonusValue) +
+                            ChatColor.GRAY + " (" + value + "%)");
+                    }
+                    case ATTACK_DAMAGE_FLAT -> {
+                        attackDamage += value;
+                        extraLore.add(prefix + ChatColor.RED + "공격력 +" + String.format("%.1f", value));
+                    }
+                    case ATTACK_DAMAGE_PERCENT -> {
+                        double bonusValue = attackDamage * (value / 100.0);
+                        attackDamage += bonusValue;
+                        extraLore.add(prefix + ChatColor.RED + "공격력 +" + String.format("%.1f", bonusValue) +
+                            ChatColor.GRAY + " (" + value + "%)");
+                    }
+                    case ATTACK_SPEED_FLAT -> {
+                        attackSpeed += value;
+                        extraLore.add(prefix + ChatColor.YELLOW + "공격 속도 +" + String.format("%.2f", value));
+                    }
+                    case ATTACK_SPEED_PERCENT -> {
+                        attackSpeed *= (1.0 + value / 100.0);
+                        extraLore.add(prefix + ChatColor.YELLOW + "공격 속도 +" + String.format("%.1f", value) + "%");
+                    }
+                    case ARMOR_FLAT -> {
+                        armor += value;
+                        extraLore.add(prefix + ChatColor.AQUA + "방어력 +" + String.format("%.1f", value));
+                    }
+                    case ARMOR_PERCENT -> {
+                        armor *= (1.0 + value / 100.0);
+                        extraLore.add(prefix + ChatColor.AQUA + "방어력 +" + String.format("%.1f", value) + "%");
+                    }
+                    case MAGIC_RESIST_FLAT -> {
+                        magicResist += value;
+                        extraLore.add(prefix + ChatColor.BLUE + "마법 저항력 +" + String.format("%.1f", value));
+                    }
+                    case MAGIC_RESIST_PERCENT -> {
+                        magicResist *= (1.0 + value / 100.0);
+                        extraLore.add(prefix + ChatColor.BLUE + "마법 저항력 +" + String.format("%.1f", value) + "%");
+                    }
+                    case CRITICAL_CHANCE -> {
+                        criticalChance += value;
+                        extraLore.add(prefix + ChatColor.GOLD + "치명타 확률 +" + String.format("%.1f", value) + "%");
+                    }
+                    case CRITICAL_DAMAGE -> {
+                        criticalDamage += value;
+                        extraLore.add(prefix + ChatColor.GOLD + "치명타 피해 +" + String.format("%.1f", value) + "%");
+                    }
+                    case LIFESTEAL -> {
+                        lifeSteal += value;
+                        extraLore.add(prefix + ChatColor.DARK_RED + "생명력 흡수 +" + String.format("%.1f", value) + "%");
+                    }
+                    case DAMAGE_REDUCTION -> extraLore.add(prefix + ChatColor.RED + "피해 감소 " + String.format("%.1f", value) + "%");
+                    case DODGE_CHANCE -> extraLore.add(prefix + ChatColor.YELLOW + "회피 확률 +" + String.format("%.1f", value) + "%");
+                    case HEAL_PER_SECOND -> extraLore.add(prefix + ChatColor.GREEN + "초당 회복 +" + String.format("%.1f", value));
+                    case MANA_REGEN -> extraLore.add(prefix + ChatColor.AQUA + "마나 재생 +" + String.format("%.1f", value) + "%");
+                    case ARMOR_PENETRATION -> extraLore.add(prefix + ChatColor.RED + "방어구 관통 +" + String.format("%.1f", value) + "%");
+                    case MAGIC_PENETRATION -> extraLore.add(prefix + ChatColor.BLUE + "마법 관통 +" + String.format("%.1f", value) + "%");
+                    case TRUE_DAMAGE -> extraLore.add(prefix + ChatColor.DARK_RED + "고정 피해 +" + String.format("%.1f", value) + "%");
+                    case AOE_DAMAGE -> extraLore.add(prefix + ChatColor.RED + "광역 피해 +" + String.format("%.1f", value) + "%");
+                    default -> {
+                        // 기타 효과는 설명만 남김
+                        extraLore.add(prefix + ChatColor.GRAY + bonus.getBonusType().getDisplayName() +
+                            " +" + String.format("%.1f", value));
+                    }
+                }
+            }
+        }
+
+        return new NBTUtils.UnitDisplayStats(
+            health,
+            attackDamage,
+            attackSpeed,
+            armor,
+            magicResist,
+            criticalChance,
+            criticalDamage,
+            lifeSteal,
+            extraLore
+        );
     }
 
     /**
@@ -450,7 +656,7 @@ public class InventoryGUIManager {
     }
 
     /**
-     * 필러 슬롯 설정 (37~45칸)
+     * 필러 슬롯 설정 (37~44칸)
      */
     private void setupFillers(Inventory gui) {
         ItemStack filler = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
@@ -464,15 +670,19 @@ public class InventoryGUIManager {
     }
 
     /**
-     * 버튼 설정 (46, 47, 54칸)
+     * 버튼 설정 (45~47, 54칸)
      */
-    private void setupButtons(Inventory gui, GamePlayer gamePlayer) {
+    private void setupButtons(Inventory gui, GamePlayer gamePlayer, Player player) {
+        // 45칸: 항복
+        ItemStack surrenderButton = createSurrenderButton();
+        gui.setItem(BUTTON_SURRENDER_SLOT, surrenderButton);
+
         // 46칸: 경험치 업
         ItemStack xpButton = createXPButton(gamePlayer);
         gui.setItem(BUTTON_XP_SLOT, xpButton);
 
-        // 47칸: 리롤
-        ItemStack rerollButton = createRerollButton(gamePlayer);
+        // 47칸: 리롤 / 잠금
+        ItemStack rerollButton = createRerollButton(gamePlayer, player.getUniqueId());
         gui.setItem(BUTTON_REROLL_SLOT, rerollButton);
 
         // 54칸: 관전 버튼
@@ -516,6 +726,11 @@ public class InventoryGUIManager {
     public void rerollShop(Player player, GamePlayer gamePlayer) {
         int cost = shopManager.getRerollCost();
 
+        if (isShopLocked(player.getUniqueId())) {
+            player.sendMessage("§c상점이 잠금되어 있어 새로고침할 수 없습니다. 우클릭으로 잠금을 해제하세요.");
+            return;
+        }
+
         if (!gamePlayer.spendGold(cost)) {
             player.sendMessage("§c골드가 부족합니다! (필요: " + cost + "G)");
             return;
@@ -525,7 +740,12 @@ public class InventoryGUIManager {
         List<Unit> newShop = shopManager.generateShop(gamePlayer.getLevel());
         playerShops.put(player.getUniqueId(), newShop);
 
-        setupGameInventory(player, gamePlayer);
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            refreshGameInventory(player, gamePlayer);
+        });
         player.sendMessage("§a상점을 새로고침했습니다!");
     }
 
@@ -555,7 +775,7 @@ public class InventoryGUIManager {
         }
 
         // 벤치 공간 확인
-        if (gamePlayer.getBench().size() >= 9) {
+        if (gamePlayer.getBench().size() >= 8) {
             player.sendMessage("§c벤치가 가득 찼습니다!");
             return false;
         }
@@ -567,31 +787,62 @@ public class InventoryGUIManager {
         // 상점에서 제거
         shopUnits.set(shopIndex, null);
 
-        // 자동 합성 체크 (준비 단계에서만)
-        var game = plugin.getGameManager().getPlayerGame(playerId);
-        if (game != null && !game.getCurrentPhase().isCombat()) {
-            int upgraded = gamePlayer.autoUpgradeUnits();
-            if (upgraded > 0) {
-                player.sendMessage("§a§l✦ " + upgraded + "개 유닛이 자동 합성되었습니다!");
-                player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
-            }
-        }
-
         player.sendMessage("§a유닛을 구매했습니다! §7(" + unit.getName() + " - §6" + unit.getCost() + "G§7)");
 
-        // 인벤토리 새로고침
-        setupGameInventory(player, gamePlayer);
+        GameInstance game = plugin.getGameManager().getPlayerGame(playerId);
+        boolean isCombatPhase = game != null && game.getCurrentPhase().isCombat();
+        boolean allowBoardUnits = !isCombatPhase;
+        int upgrades = gamePlayer.autoUpgradeUnits(allowBoardUnits);
 
-        // 스코어보드 업데이트
-        if (game != null) {
-            game.updateGameDisplays();
+        if (upgrades > 0) {
+            player.sendMessage("§a§l✦ " + upgrades + "개 유닛이 자동 합성되었습니다!");
+            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
         }
+
+        final boolean allowPreviewRefresh = !isCombatPhase && game != null;
+        final boolean upgraded = upgrades > 0;
+        // 동일한 틱 내에서 블럭하면 클라이언트 반영이 늦어질 수 있어 다음 틱으로 넘긴다.
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+
+            if (upgraded) {
+                player.closeInventory();
+                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    if (!player.isOnline()) {
+                        return;
+                    }
+                    // 합성된 결과를 첫 화면에서 바로 보여주기 위해 GUI를 다시 구축한다.
+                    setupGameInventory(player, gamePlayer);
+                    player.updateInventory();
+                }, 1L);
+            } else {
+                // 합성이 없으면 열린 상태에서 즉시 시각적 요소만 갱신한다.
+                refreshGameInventory(player, gamePlayer);
+                player.updateInventory();
+            }
+
+            if (game != null) {
+                game.updateGameDisplays();
+                Bukkit.getScheduler().runTaskLater(plugin, () -> {
+                    if (!player.isOnline()) {
+                        return;
+                    }
+                    GameInstance refreshed = plugin.getGameManager().getPlayerGame(playerId);
+                    if (refreshed != null && !refreshed.getCurrentPhase().isCombat()) {
+                        // 준비 단계라면 미리보기 아바타를 완전히 갈아끼운다.
+                        refreshed.refreshAllPreviewUnits(playerId);
+                    }
+                }, allowPreviewRefresh ? 2L : 1L);
+            }
+        });
 
         return true;
     }
 
     /**
-     * 관전 모드 플레이어 목록 GUI 열기
+     * 관전 모드 플레이어 목록 GUI 열기 (분리 필요)
      */
     public void openSpectateList(Player player) {
         var game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
@@ -639,25 +890,17 @@ public class InventoryGUIManager {
             // 타겟의 아레나로 텔레포트 (보드판 중앙)
             var game = plugin.getGameManager().getPlayerGame(targetId);
             if (game != null) {
-                var arena = game.getPlayerArena(targetId);
-                if (arena != null) {
-                    Location pos1 = arena.getPos1();
-                    Location pos2 = arena.getPos2();
-
-                    // 보드판 중심 좌표 계산
-                    double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
-                    double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
-                    double boardY = Math.min(pos1.getY(), pos2.getY());
-
+                var board = game.getPlayerBoard(targetId);
+                if (board != null) {
+                    Location spawnPos = board.getPlayerSpawnLocation();
                     // 보드판 위에 스폰 (보드판 표면 + 1블록)
-                    Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
                     spectator.teleport(spawnPos);
                     spectator.sendMessage("§a" + target.getName() + "의 배치판을 보고 있습니다.");
                 }
             }
 
             // 핫바 9번 칸에 돌아가기 버튼 설정
-            ItemStack returnButton = new ItemStack(Material.ARROW);
+            ItemStack returnButton = new ItemStack(Material.SPECTRAL_ARROW);
             ItemMeta meta = returnButton.getItemMeta();
             meta.setDisplayName("§e내 배치판으로 돌아가기");
             returnButton.setItemMeta(meta);
@@ -676,21 +919,13 @@ public class InventoryGUIManager {
             var gamePlayer = game.getPlayer(player.getUniqueId());
             if (gamePlayer != null) {
                 // 자신의 아레나로 텔레포트 (보드판 중앙)
-                var arena = game.getPlayerArena(player.getUniqueId());
-                if (arena != null) {
-                    Location pos1 = arena.getPos1();
-                    Location pos2 = arena.getPos2();
-
-                    // 보드판 중심 좌표 계산
-                    double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
-                    double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
-                    double boardY = Math.min(pos1.getY(), pos2.getY());
-
-                    // 보드판 위에 스폰 (보드판 표면 + 1블록)
-                    Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
+                var board = game.getPlayerBoard(player.getUniqueId());
+                if (board != null) {
+                    // 보드판 위에 스폰
+                    Location spawnPos = board.getPlayerSpawnLocation();
                     player.teleport(spawnPos);
                 }
-
+                player.getInventory().setItem(8, new ItemStack(Material.AIR));
                 setupGameInventory(player, gamePlayer);
                 player.sendMessage("§a내 배치판으로 돌아왔습니다.");
             }

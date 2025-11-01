@@ -38,7 +38,7 @@ game:
   max-win-streak-bonus: 5
   xp-per-round: 2
   xp-cost-gold: 4
-  xp-per-purchase: 2
+  xp-per-purchase: 4
 
   # Level settings
   max-level: 8
@@ -169,30 +169,39 @@ arena:
     yaw: 0.0
     pitch: 0.0
 
-  # Board template (8x6 chessboard)
-  # 관리자가 /mcadmin setboard로 설정합니다
-  # 첫 우클릭: 바닥 모서리, 두 번째 우클릭: 대각선 반대편 최상단
-  board-template:
-    world: ""
-    pos1:
-      x: 0.0
-      y: 64.0
-      z: 0.0
-    pos2:
-      x: 0.0
-      y: 64.0
-      z: 0.0
+# Board system (Dynamic unlimited boards)
+board:
+  # Board world name (automatically created as flat void world)
+  world-name: "matochessWorld"
 
-  # Arena world (40개의 체스판이 생성될 월드)
-  # /mcadmin setworld <월드명>으로 설정 후 자동 생성됩니다
-  arena-world: ""
+  # Distance between board centers (blocks)
+  # 권장: 300 (일반), 500 (대규모 서버)
+  # 각 보드는 32x24 블록이므로 최소 50블록 이상 권장
+  spacing: 300
 
-  # Number of pre-generated arenas
-  max-arenas: 40
+  # Unload delay after game ends (seconds)
+  # 플레이어가 다시 게임을 시작할 경우를 대비한 캐싱 시간
+  unload-delay: 300
 
-  # Spacing between arenas (blocks)
-  # 각 체스판 사이의 간격 (블록 단위)
-  arena-spacing: 30
+  # Maximum concurrent board loads
+  # 동시에 로딩 가능한 보드 수 (서버 성능 보호)
+  max-concurrent-loads: 3
+
+  # Blocks placed per tick during board building
+  # 높을수록 빠르지만 TPS 영향 증가
+  # 권장: 100-200
+  blocks-per-tick: 150
+
+# Board Points (BT) Currency System
+board-points:
+  # BT 아이템 설정
+  # 관리자가 /mcadmin bt itemset <amount> 명령어로 설정합니다
+  # NBT, 인첸트, 로어, 이름을 포함한 커스텀 아이템만 인식됩니다
+  item:
+    # Base64 인코딩된 아이템 데이터 (자동 설정됨)
+    data: ""
+    # 아이템 사용 시 얻는 BT 양
+    amount: 10
 
 # Messages
 messages:

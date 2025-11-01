@@ -42,9 +42,16 @@ public class NBTUtils {
     private static final String TYPE_EQUIPMENT = "equipment";
 
     /**
-     * Create an ItemStack representing a Unit
+     * Create an ItemStack representing a Unit (기본 값)
      */
     public static ItemStack createUnitItem(Unit unit, NamespacedKey key) {
+        return createUnitItem(unit, key, null);
+    }
+
+    /**
+     * Create an ItemStack representing a Unit with 사전 계산된 표시 스텟
+     */
+    public static ItemStack createUnitItem(Unit unit, NamespacedKey key, UnitDisplayStats stats) {
         ItemStack item = new ItemStack(unit.getIconMaterial());
         ItemMeta meta = item.getItemMeta();
 
@@ -96,16 +103,34 @@ public class NBTUtils {
             lore.add("");
         }
 
-        lore.add(ChatColor.GREEN + "체력: " + String.format("%.1f", unit.getHealth()));
-        lore.add(ChatColor.RED + "공격력: " + String.format("%.1f", unit.getAttackDamage()));
-        lore.add(ChatColor.YELLOW + "공격 속도: " + String.format("%.1f", unit.getAttackSpeed()));
-        lore.add(ChatColor.AQUA + "방어력: " + String.format("%.1f", unit.getArmor()));
+        double displayHealth = stats != null ? stats.getHealth() : unit.getHealth();
+        double displayAttackDamage = stats != null ? stats.getAttackDamage() : unit.getAttackDamage();
+        double displayAttackSpeed = stats != null ? stats.getAttackSpeed() : unit.getAttackSpeed();
+        double displayArmor = stats != null ? stats.getArmor() : unit.getArmor();
+        double displayMagicResist = stats != null ? stats.getMagicResist() : unit.getMagicResist();
+        double displayCritChance = stats != null ? stats.getCriticalChance() : unit.getCriticalChance();
+        double displayCritDamage = stats != null ? stats.getCriticalDamage() : unit.getCriticalDamage();
+        double displayLifeSteal = stats != null ? stats.getLifeSteal() : unit.getLifeSteal();
+
+        lore.add(ChatColor.GREEN + "체력: " + String.format("%.1f", displayHealth));
+        lore.add(ChatColor.RED + "공격력: " + String.format("%.1f", displayAttackDamage));
+        lore.add(ChatColor.YELLOW + "공격 속도: " + String.format("%.2f", displayAttackSpeed));
+        lore.add(ChatColor.AQUA + "방어력: " + String.format("%.1f", displayArmor));
+        lore.add(ChatColor.BLUE + "마법 저항력: " + String.format("%.1f", displayMagicResist));
+        lore.add(ChatColor.GOLD + "치명타 확률: " + String.format("%.1f", displayCritChance) + "%");
+        lore.add(ChatColor.GOLD + "치명타 피해: " + String.format("%.1f", displayCritDamage) + "%");
+        lore.add(ChatColor.DARK_RED + "생명력 흡수: " + String.format("%.1f", displayLifeSteal) + "%");
+
+        if (stats != null && !stats.getAdditionalLore().isEmpty()) {
+            lore.add("");
+            lore.addAll(stats.getAdditionalLore());
+        }
 
         if (!unit.getEquipment().isEmpty()) {
             lore.add("");
             lore.add(ChatColor.LIGHT_PURPLE + "장착된 장비:");
             for (Equipment eq : unit.getEquipment()) {
-                lore.add(ChatColor.GRAY + "- " + eq.getName());
+                lore.add(ChatColor.GRAY + "[장비] - " + ChatColor.LIGHT_PURPLE + eq.getName());
             }
         }
 
@@ -113,6 +138,71 @@ public class NBTUtils {
         item.setItemMeta(meta);
 
         return item;
+    }
+
+    /**
+     * 유닛 표시용 스텟 묶음
+     */
+    public static class UnitDisplayStats {
+        private final double health;
+        private final double attackDamage;
+        private final double attackSpeed;
+        private final double armor;
+        private final double magicResist;
+        private final double criticalChance;
+        private final double criticalDamage;
+        private final double lifeSteal;
+        private final List<String> additionalLore;
+
+        public UnitDisplayStats(double health, double attackDamage, double attackSpeed,
+                                double armor, double magicResist, double criticalChance,
+                                double criticalDamage, double lifeSteal, List<String> additionalLore) {
+            this.health = health;
+            this.attackDamage = attackDamage;
+            this.attackSpeed = attackSpeed;
+            this.armor = armor;
+            this.magicResist = magicResist;
+            this.criticalChance = criticalChance;
+            this.criticalDamage = criticalDamage;
+            this.lifeSteal = lifeSteal;
+            this.additionalLore = additionalLore != null ? additionalLore : new ArrayList<>();
+        }
+
+        public double getHealth() {
+            return health;
+        }
+
+        public double getAttackDamage() {
+            return attackDamage;
+        }
+
+        public double getAttackSpeed() {
+            return attackSpeed;
+        }
+
+        public double getArmor() {
+            return armor;
+        }
+
+        public double getMagicResist() {
+            return magicResist;
+        }
+
+        public double getCriticalChance() {
+            return criticalChance;
+        }
+
+        public double getCriticalDamage() {
+            return criticalDamage;
+        }
+
+        public double getLifeSteal() {
+            return lifeSteal;
+        }
+
+        public List<String> getAdditionalLore() {
+            return additionalLore;
+        }
     }
 
     /**
@@ -145,6 +235,8 @@ public class NBTUtils {
 
         List<String> lore = new ArrayList<>();
         lore.add(ChatColor.GRAY + "장비");
+        lore.add("");
+        lore.add(ChatColor.WHITE + "§o원하는 유닛에 드래그 앤 드롭하여 강화하세요!");
         lore.add("");
 
         equipment.getStatBonuses().forEach((statType, value) -> {

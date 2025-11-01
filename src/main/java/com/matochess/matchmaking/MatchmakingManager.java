@@ -223,9 +223,9 @@ public class MatchmakingManager {
             }
         }
 
-        // 게임 생성 및 시작
+        // 게임 생성 (보드 로딩 완료 후 자동으로 시작됨)
         GameInstance game = plugin.getGameManager().createGame(playerIds);
-        Bukkit.getScheduler().runTaskLater(plugin, game::startGame, 60L); // 3초 지연
+        // startGame()은 이제 GameInstance 생성자에서 보드 로딩 완료 후 자동 호출됨
     }
 
     /**

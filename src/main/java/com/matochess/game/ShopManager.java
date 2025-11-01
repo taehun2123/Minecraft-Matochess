@@ -8,7 +8,7 @@ import com.matochess.data.UnitTier;
 import java.util.*;
 
 /**
- * Manages shop unit generation and refresh
+ * 유닛을 생성하고 새로고침하는 상점 매니저
  */
 public class ShopManager {
 
@@ -22,7 +22,7 @@ public class ShopManager {
     }
 
     /**
-     * Generate a shop for a player based on their level
+     * 플레이어 레벨에 기반한 상점 생성
      */
     public List<Unit> generateShop(int playerLevel) {
         List<Unit> shop = new ArrayList<>();
@@ -40,7 +40,7 @@ public class ShopManager {
     }
 
     /**
-     * Get probability table for player level
+     * 플레이어 레벨에 따른 기물 단계 생성 확률
      */
     private int[] getProbabilityForLevel(int level) {
         String path = "units.probability.level-" + level;

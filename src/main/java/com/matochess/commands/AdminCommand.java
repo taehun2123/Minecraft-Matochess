@@ -1,11 +1,16 @@
 package com.matochess.commands;
 
 import com.matochess.MatoChessPlugin;
+import com.matochess.data.PlayerProfile;
+import com.matochess.gui.AdminShopGUI;
+import com.matochess.util.ItemSerializer;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 
 /**
  * MatoChess 관리자 명령어
@@ -13,9 +18,11 @@ import org.bukkit.entity.Player;
 public class AdminCommand implements CommandExecutor {
 
     private final MatoChessPlugin plugin;
+    private final AdminShopGUI adminShopGUI;
 
-    public AdminCommand(MatoChessPlugin plugin) {
+    public AdminCommand(MatoChessPlugin plugin, AdminShopGUI adminShopGUI) {
         this.plugin = plugin;
+        this.adminShopGUI = adminShopGUI;
     }
 
     @Override
@@ -60,9 +67,6 @@ public class AdminCommand implements CommandExecutor {
                 cancelBoardSetup((Player) sender);
                 break;
 
-            case "setworld":
-                setArenaWorld(sender);
-                break;
 
             case "debug":
                 displayDebugInfo(sender);
@@ -81,7 +85,17 @@ public class AdminCommand implements CommandExecutor {
                 break;
 
             case "arenas":
-                displayArenaInfo(sender);
+            case "boards":
+                displayBoardInfo(sender);
+                break;
+
+            case "bt":
+            case "boardpoints":
+                handleBTCommand(sender, args);
+                break;
+
+            case "shop":
+                handleShopCommand(sender, args);
                 break;
 
             default:
@@ -97,15 +111,23 @@ public class AdminCommand implements CommandExecutor {
         sender.sendMessage("§a게임 설정:");
         sender.sendMessage("§e/mcadmin reload §7- 설정 리로드");
         sender.sendMessage("§e/mcadmin setlobby §7- 로비 스폰 설정 (현재 위치)");
-        sender.sendMessage("§e/mcadmin setboard §7- 체스판 템플릿 설정 (우클릭 2회)");
-        sender.sendMessage("§e/mcadmin cancelboard §7- 체스판 설정 취소");
-        sender.sendMessage("§e/mcadmin setworld <월드명> §7- 40개 체스판 생성");
+        sender.sendMessage("");
+        sender.sendMessage("§aBT 관리:");
+        sender.sendMessage("§e/mcadmin bt give <플레이어> <양> §7- BT 지급");
+        sender.sendMessage("§e/mcadmin bt take <플레이어> <양> §7- BT 차감");
+        sender.sendMessage("§e/mcadmin bt set <플레이어> <양> §7- BT 설정");
+        sender.sendMessage("§e/mcadmin bt check <플레이어> §7- BT 확인");
+        sender.sendMessage("§e/mcadmin bt itemset <양> §7- 손에 든 아이템을 BT 아이템으로 설정");
+        sender.sendMessage("");
+        sender.sendMessage("§a상점 관리:");
+        sender.sendMessage("§e/mcadmin shop §7- 상점 관리 GUI 열기");
+        sender.sendMessage("§e/mcadmin shop cancel §7- 진행 중인 설정 취소");
         sender.sendMessage("");
         sender.sendMessage("§a정보 확인:");
         sender.sendMessage("§e/mcadmin debug §7- 디버그 정보");
         sender.sendMessage("§e/mcadmin games §7- 활성 게임 수");
         sender.sendMessage("§e/mcadmin queue §7- 큐 대기 인원");
-        sender.sendMessage("§e/mcadmin arenas §7- 아레나 상태");
+        sender.sendMessage("§e/mcadmin boards §7- 보드 시스템 정보");
     }
 
     /**
@@ -147,44 +169,21 @@ public class AdminCommand implements CommandExecutor {
         }
     }
 
-    /**
-     * 커스텀 보드판으로 아레나 월드 재생성
-     */
-    private void setArenaWorld(CommandSender sender) {
-        // 템플릿 설정 확인
-        if (!plugin.getArenaManager().isBoardTemplateConfigured()) {
-            sender.sendMessage("§c커스텀 보드판이 설정되지 않았습니다!");
-            sender.sendMessage("§e기본 잔디 보드판이 이미 생성되어 있습니다.");
-            sender.sendMessage("§e커스텀 보드판을 원하시면 먼저 §6/mcadmin setboard §e명령어를 사용하세요");
-            return;
-        }
-
-        sender.sendMessage("§a커스텀 보드판으로 아레나 월드를 재생성합니다...");
-        sender.sendMessage("§c경고: 기존 월드가 삭제됩니다!");
-        sender.sendMessage("§e체스판 생성을 시작합니다... (시간이 걸릴 수 있습니다)");
-
-        // 동기로 월드 재생성 및 커스텀 체스판 생성 (블록 설정은 반드시 동기여야 함)
-        org.bukkit.Bukkit.getScheduler().runTask(plugin, () -> {
-            boolean success = plugin.getArenaManager().createWorldAndGenerateArenas();
-
-            if (success) {
-                sender.sendMessage("§a커스텀 체스판 생성 완료!");
-                sender.sendMessage("§e총 §640개 §e커스텀 체스판이 생성되었습니다");
-            } else {
-                sender.sendMessage("§c체스판 생성 실패! 로그를 확인하세요");
-            }
-        });
-    }
 
     /**
      * 아레나 상태 정보
      */
-    private void displayArenaInfo(CommandSender sender) {
-        sender.sendMessage("§6§l=== 아레나 정보 ===");
-        sender.sendMessage("§e전체 아레나: §f" + plugin.getArenaManager().getTotalArenaCount());
-        sender.sendMessage("§e사용 가능: §a" + plugin.getArenaManager().getAvailableArenaCount());
-        sender.sendMessage("§e사용 중: §c" +
-            (plugin.getArenaManager().getTotalArenaCount() - plugin.getArenaManager().getAvailableArenaCount()));
+    private void displayBoardInfo(CommandSender sender) {
+        sender.sendMessage("§6§l=== 보드 시스템 정보 ===");
+        sender.sendMessage("§e현재 로드된 보드: §f" + plugin.getBoardInstanceManager().getLoadedBoardCount());
+        sender.sendMessage("§e총 할당된 보드: §f" + plugin.getDataManager().getTotalAllocatedBoards());
+        sender.sendMessage("§e등록된 템플릿: §f" + plugin.getTemplateManager().getAllTemplates().size());
+        sender.sendMessage("§e보드 간격: §f" + plugin.getConfig().getInt("board.spacing", 300) + " 블록");
+
+        // Memory info
+        Runtime runtime = Runtime.getRuntime();
+        long usedMemory = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024;
+        sender.sendMessage("§e메모리 사용량: §f" + usedMemory + "MB");
     }
 
     /**
@@ -197,13 +196,292 @@ public class AdminCommand implements CommandExecutor {
         sender.sendMessage("§e큐 방 수: §f" + plugin.getMatchmakingManager().getRoomCount());
         sender.sendMessage("§eDB 연결: §f" + (plugin.getDataManager() != null ? "활성 (SQLite)" : "비활성"));
 
-        // 아레나 설정
+        // 보드 시스템 설정
         sender.sendMessage("");
-        sender.sendMessage("§6아레나 설정:");
+        sender.sendMessage("§6보드 시스템:");
         sender.sendMessage("§e로비 월드: §f" + plugin.getConfig().getString("arena.lobby-spawn.world"));
-        sender.sendMessage("§e아레나 월드: §f" + plugin.getConfig().getString("arena.arena-world"));
-        sender.sendMessage("§e체스판 템플릿 설정: §f" +
-            (plugin.getArenaManager().isBoardTemplateConfigured() ? "완료" : "미완료"));
-        sender.sendMessage("§e체스판 개수: §f" + plugin.getArenaManager().getTotalArenaCount());
+        sender.sendMessage("§e보드 월드: §f" + plugin.getConfig().getString("board.world-name", "matochessWorld"));
+        sender.sendMessage("§e로드된 보드: §f" + plugin.getBoardInstanceManager().getLoadedBoardCount());
+        sender.sendMessage("§e총 할당: §f" + plugin.getDataManager().getTotalAllocatedBoards());
+        sender.sendMessage("§e템플릿 수: §f" + plugin.getTemplateManager().getAllTemplates().size());
+    }
+
+    /**
+     * BT 관리 명령어 처리
+     */
+    private void handleBTCommand(CommandSender sender, String[] args) {
+        if (args.length < 2) {
+            sender.sendMessage("§c사용법: /mcadmin bt <give|take|set|check> <플레이어> [양]");
+            return;
+        }
+
+        String subCommand = args[1].toLowerCase();
+
+        switch (subCommand) {
+            case "give":
+                if (args.length < 4) {
+                    sender.sendMessage("§c사용법: /mcadmin bt give <플레이어> <양>");
+                    return;
+                }
+                giveBT(sender, args[2], args[3]);
+                break;
+
+            case "take":
+                if (args.length < 4) {
+                    sender.sendMessage("§c사용법: /mcadmin bt take <플레이어> <양>");
+                    return;
+                }
+                takeBT(sender, args[2], args[3]);
+                break;
+
+            case "set":
+                if (args.length < 4) {
+                    sender.sendMessage("§c사용법: /mcadmin bt set <플레이어> <양>");
+                    return;
+                }
+                setBT(sender, args[2], args[3]);
+                break;
+
+            case "check":
+                if (args.length < 3) {
+                    sender.sendMessage("§c사용법: /mcadmin bt check <플레이어>");
+                    return;
+                }
+                checkBT(sender, args[2]);
+                break;
+
+            case "itemset":
+                if (!(sender instanceof Player)) {
+                    sender.sendMessage("§c플레이어만 사용할 수 있습니다!");
+                    return;
+                }
+                if (args.length < 3) {
+                    sender.sendMessage("§c사용법: /mcadmin bt itemset <BT량>");
+                    return;
+                }
+                setBTItem((Player) sender, args[2]);
+                break;
+
+            default:
+                sender.sendMessage("§c알 수 없는 명령어입니다. give, take, set, check, itemset 중 하나를 사용하세요.");
+                break;
+        }
+    }
+
+    /**
+     * BT 지급
+     */
+    private void giveBT(CommandSender sender, String playerName, String amountStr) {
+        Player target = Bukkit.getPlayer(playerName);
+
+        if (target == null) {
+            sender.sendMessage("§c플레이어를 찾을 수 없습니다: " + playerName);
+            return;
+        }
+
+        int amount;
+        try {
+            amount = Integer.parseInt(amountStr);
+            if (amount <= 0) {
+                sender.sendMessage("§c양은 0보다 커야 합니다.");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c올바른 숫자를 입력하세요.");
+            return;
+        }
+
+        plugin.getDataManager().loadProfile(target.getUniqueId(), target.getName()).thenAccept(profile -> {
+            if (profile == null) {
+                sender.sendMessage("§c프로필을 불러올 수 없습니다.");
+                return;
+            }
+
+            profile.addBoardPoints(amount);
+            plugin.getDataManager().saveProfile(profile);
+
+            sender.sendMessage("§a" + target.getName() + "에게 " + amount + " BT를 지급했습니다. (총: " + profile.getBoardPoints() + " BT)");
+            target.sendMessage("§a관리자로부터 " + amount + " BT를 받았습니다! §7(총: §e" + profile.getBoardPoints() + " BT§7)");
+        });
+    }
+
+    /**
+     * BT 차감
+     */
+    private void takeBT(CommandSender sender, String playerName, String amountStr) {
+        Player target = Bukkit.getPlayer(playerName);
+
+        if (target == null) {
+            sender.sendMessage("§c플레이어를 찾을 수 없습니다: " + playerName);
+            return;
+        }
+
+        int amount;
+        try {
+            amount = Integer.parseInt(amountStr);
+            if (amount <= 0) {
+                sender.sendMessage("§c양은 0보다 커야 합니다.");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c올바른 숫자를 입력하세요.");
+            return;
+        }
+
+        plugin.getDataManager().loadProfile(target.getUniqueId(), target.getName()).thenAccept(profile -> {
+            if (profile == null) {
+                sender.sendMessage("§c프로필을 불러올 수 없습니다.");
+                return;
+            }
+
+            if (profile.subtractBoardPoints(amount)) {
+                plugin.getDataManager().saveProfile(profile);
+                sender.sendMessage("§a" + target.getName() + "으로부터 " + amount + " BT를 차감했습니다. (남은: " + profile.getBoardPoints() + " BT)");
+                target.sendMessage("§c" + amount + " BT가 차감되었습니다. §7(남은: §e" + profile.getBoardPoints() + " BT§7)");
+            } else {
+                sender.sendMessage("§c" + target.getName() + "의 BT가 부족합니다. (보유: " + profile.getBoardPoints() + " BT)");
+            }
+        });
+    }
+
+    /**
+     * BT 설정
+     */
+    private void setBT(CommandSender sender, String playerName, String amountStr) {
+        Player target = Bukkit.getPlayer(playerName);
+
+        if (target == null) {
+            sender.sendMessage("§c플레이어를 찾을 수 없습니다: " + playerName);
+            return;
+        }
+
+        int amount;
+        try {
+            amount = Integer.parseInt(amountStr);
+            if (amount < 0) {
+                sender.sendMessage("§c양은 0 이상이어야 합니다.");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c올바른 숫자를 입력하세요.");
+            return;
+        }
+
+        plugin.getDataManager().loadProfile(target.getUniqueId(), target.getName()).thenAccept(profile -> {
+            if (profile == null) {
+                sender.sendMessage("§c프로필을 불러올 수 없습니다.");
+                return;
+            }
+
+            profile.setBoardPoints(amount);
+            plugin.getDataManager().saveProfile(profile);
+
+            sender.sendMessage("§a" + target.getName() + "의 BT를 " + amount + "로 설정했습니다.");
+            target.sendMessage("§aBT가 " + amount + "로 설정되었습니다.");
+        });
+    }
+
+    /**
+     * BT 확인
+     */
+    private void checkBT(CommandSender sender, String playerName) {
+        Player target = Bukkit.getPlayer(playerName);
+
+        if (target == null) {
+            sender.sendMessage("§c플레이어를 찾을 수 없습니다: " + playerName);
+            return;
+        }
+
+        plugin.getDataManager().loadProfile(target.getUniqueId(), target.getName()).thenAccept(profile -> {
+            if (profile == null) {
+                sender.sendMessage("§c프로필을 불러올 수 없습니다.");
+                return;
+            }
+
+            sender.sendMessage("§e" + target.getName() + "의 BT: §f" + profile.getBoardPoints() + " BT");
+        });
+    }
+
+    /**
+     * 손에 든 아이템을 BT 아이템으로 설정
+     */
+    private void setBTItem(Player sender, String amountStr) {
+        ItemStack item = sender.getInventory().getItemInMainHand();
+
+        if (item == null || item.getType().isAir()) {
+            sender.sendMessage("§c손에 아이템을 들어주세요!");
+            return;
+        }
+
+        int amount;
+        try {
+            amount = Integer.parseInt(amountStr);
+            if (amount <= 0) {
+                sender.sendMessage("§cBT량은 0보다 커야 합니다.");
+                return;
+            }
+        } catch (NumberFormatException e) {
+            sender.sendMessage("§c올바른 숫자를 입력하세요.");
+            return;
+        }
+
+        // ItemStack을 Base64로 인코딩
+        String base64 = ItemSerializer.itemToBase64(item);
+
+        if (base64 == null) {
+            sender.sendMessage("§c아이템 저장에 실패했습니다.");
+            return;
+        }
+
+        // config에 저장
+        plugin.getConfig().set("board-points.item.data", base64);
+        plugin.getConfig().set("board-points.item.amount", amount);
+        plugin.saveConfig();
+
+        sender.sendMessage("§a손에 든 아이템을 BT 아이템으로 설정했습니다!");
+        sender.sendMessage("§7- 아이템: §f" + item.getType().name());
+        if (item.hasItemMeta() && item.getItemMeta().hasDisplayName()) {
+            sender.sendMessage("§7- 이름: §f" + item.getItemMeta().getDisplayName());
+        }
+        sender.sendMessage("§7- 지급량: §e" + amount + " BT");
+    }
+
+    // ========== Shop 관리 명령어 (GUI 기반) ==========
+
+    /**
+     * Shop 관리 명령어 처리
+     */
+    private void handleShopCommand(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player)) {
+            sender.sendMessage("§c플레이어만 사용할 수 있습니다!");
+            return;
+        }
+
+        Player admin = (Player) sender;
+
+        if (args.length < 2) {
+            // 인자가 없으면 상점 GUI 열기
+            adminShopGUI.openAdminShop(admin);
+            return;
+        }
+
+        String subCommand = args[1].toLowerCase();
+
+        switch (subCommand) {
+            case "open":
+                adminShopGUI.openAdminShop(admin);
+                break;
+
+            case "cancel":
+                adminShopGUI.resetSession(admin);
+                admin.sendMessage("§a진행 중인 상점 설정이 취소되었습니다.");
+                break;
+
+            default:
+                admin.sendMessage("§c알 수 없는 명령어입니다.");
+                admin.sendMessage("§7/mcadmin shop §7- 상점 관리 GUI 열기");
+                admin.sendMessage("§7/mcadmin shop cancel §7- 진행 중인 설정 취소");
+                break;
+        }
     }
 }

@@ -11,16 +11,19 @@ public class PlayerProfile {
     private final UUID playerId;
     private String playerName;
 
-    // Ranking
+    // 랭킹
     private Tier tier;
     private int division; // 5 to 1 (5 = lowest, 1 = highest in tier)
     private int ratingPoints;
 
-    // Statistics
+    // 통계
     private int gamesPlayed;
     private int wins; // 1st place
     private int top4; // 1st to 4th place
     private int totalPlacement; // Sum of all placements for average calculation
+
+    // BT
+    private int boardPoints; // BT (Board Points) - 보드 구매용 재화
 
     // Timestamps
     private long firstPlayed;
@@ -36,6 +39,7 @@ public class PlayerProfile {
         this.wins = 0;
         this.top4 = 0;
         this.totalPlacement = 0;
+        this.boardPoints = 0;
         this.firstPlayed = System.currentTimeMillis();
         this.lastPlayed = System.currentTimeMillis();
     }
@@ -234,4 +238,41 @@ public class PlayerProfile {
     public void setLastPlayed(long lastPlayed) {
         this.lastPlayed = lastPlayed;
     }
+
+    public int getBoardPoints() {
+        return boardPoints;
+    }
+
+    public void setBoardPoints(int boardPoints) {
+        this.boardPoints = Math.max(0, boardPoints); // Never negative
+    }
+
+    /**
+     * Add board points
+     * @param amount Amount to add
+     */
+    public void addBoardPoints(int amount) {
+        this.boardPoints += amount;
+    }
+
+    /**
+     * Subtract board points
+     * @param amount Amount to subtract
+     * @return true if successful, false if insufficient points
+     */
+    public boolean subtractBoardPoints(int amount) {
+        if (boardPoints >= amount) {
+            boardPoints -= amount;
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if player has enough board points
+     */
+    public boolean hasBoardPoints(int amount) {
+        return boardPoints >= amount;
+    }
 }
+

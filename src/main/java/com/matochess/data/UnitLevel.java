@@ -1,8 +1,8 @@
 package com.matochess.data;
 
 /**
- * Represents the enhancement level of a unit
- * Units can be upgraded up to 3 stars by combining 3 identical units
+ * 유닛의 강화단계 (1~3성)
+ * 3개의 같은 강화단계의 동일한 유닛을 조합하여 다음 강화단계로 승급을 할 수 있습니다.
  */
 public enum UnitLevel {
     LEVEL_1(1, 1.0, "★"),
@@ -37,7 +37,7 @@ public enum UnitLevel {
     }
 
     /**
-     * Get the next level, or null if already max level
+     * 다음 레벨을 얻습니다. null 시 최대 레벨임
      */
     public UnitLevel next() {
         if (this == LEVEL_3) return null;

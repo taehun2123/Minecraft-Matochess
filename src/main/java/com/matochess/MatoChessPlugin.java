@@ -2,6 +2,8 @@ package com.matochess;
 
 import com.matochess.combat.CombatManager;
 import com.matochess.commands.AdminCommand;
+import com.matochess.commands.BoardCommand;
+import com.matochess.commands.MtChessCommand;
 import com.matochess.commands.QueueCommand;
 import com.matochess.commands.StatsCommand;
 import com.matochess.core.EquipmentRegistry;
@@ -13,7 +15,8 @@ import com.matochess.game.GameManager;
 import com.matochess.gui.InventoryGUIManager;
 import com.matochess.gui.QueueGUI;
 import com.matochess.listeners.*;
-import com.matochess.managers.ArenaManager;
+import com.matochess.board.management.BoardInstanceManager;
+import com.matochess.board.management.BoardTemplateManager;
 import com.matochess.managers.PlayerDataManager;
 import com.matochess.matchmaking.MatchmakingManager;
 import org.bukkit.NamespacedKey;
@@ -42,53 +45,41 @@ public class MatoChessPlugin extends JavaPlugin {
 
     // New managers
     private PlayerDataManager playerDataManager;
-    private ArenaManager arenaManager;
     private QueueGUI queueGUI;
     private BoardSetupListener boardSetupListener;
+
+    // Board system
+    private BoardTemplateManager boardTemplateManager;
+    private BoardInstanceManager boardInstanceManager;
+
+    // Shop GUI system
+    private com.matochess.gui.BoardShopGUI boardShopGUI;
+    private com.matochess.gui.AdminShopGUI adminShopGUI;
 
     @Override
     public void onEnable() {
         instance = this;
 
-        // Save default config
+        // config 기본 세팅 저장
         saveDefaultConfig();
 
-        // Initialize managers
+        // 매니저 초기 설정
         if (!initializeManagers()) {
             getLogger().severe("Failed to initialize managers. Disabling plugin...");
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
 
-        // Register commands
+        // 커맨드 등록
         registerCommands();
 
-        // Register events
+        // 이벤트 등록
         registerEvents();
 
-        // Initialize arena world and boards
-        initializeArenaWorld();
-
-        getLogger().info("MatoChess plugin has been enabled successfully!");
-        getLogger().info("Version: " + getDescription().getVersion());
-    }
-
-    /**
-     * 아레나 월드 및 기본 보드판 초기화
-     */
-    private void initializeArenaWorld() {
-        getLogger().info("Initializing arena world...");
-
-        // 동기로 월드 및 보드판 생성 (블록 설정은 반드시 동기여야 함)
-        getServer().getScheduler().runTask(this, () -> {
-            boolean success = arenaManager.initializeDefaultWorld();
-
-            if (success) {
-                getLogger().info("Arena world initialized successfully with 40 default boards!");
-            } else {
-                getLogger().warning("Failed to initialize arena world. Use /mcadmin setworld to create manually.");
-            }
-        });
+        getLogger().info("마토체스 플러그인이 성공적으로 로딩되었습니다!");
+        getLogger().info("버전: " + getDescription().getVersion());
+        getLogger().info("Board system: Dynamic (unlimited boards with " +
+            getConfig().getInt("board.spacing", 300) + " block spacing)");
     }
 
     @Override
@@ -98,16 +89,21 @@ public class MatoChessPlugin extends JavaPlugin {
             gameManager.shutdown();
         }
 
+        // Shutdown board instance manager
+        if (boardInstanceManager != null) {
+            boardInstanceManager.shutdown();
+        }
+
         // Close database connections
         if (dataManager != null) {
             dataManager.close();
         }
 
-        getLogger().info("MatoChess plugin has been disabled.");
+        getLogger().info("마토체스 플러그인이 비활성화 되었습니다.");
     }
 
     /**
-     * Initialize all plugin managers
+     * 모든 플러그인 매너지들 초기화
      * @return true if successful, false otherwise
      */
     private boolean initializeManagers() {
@@ -115,31 +111,31 @@ public class MatoChessPlugin extends JavaPlugin {
             // Unit registry
             this.unitRegistry = new UnitRegistry();
             unitRegistry.registerDefaults();
-            getLogger().info("Registered " + unitRegistry.getAllUnitIds().size() + " units");
+            getLogger().info("유닛 " + unitRegistry.getAllUnitIds().size() + " 개 등록됨");
 
             // Equipment registry
             this.equipmentRegistry = new EquipmentRegistry();
             equipmentRegistry.registerDefaults();
-            getLogger().info("Registered " + equipmentRegistry.getAllEquipmentIds().size() + " equipment");
+            getLogger().info("장비 " + equipmentRegistry.getAllEquipmentIds().size() + " 개 등록됨");
 
             // Monster registry
             this.monsterRegistry = new MonsterRegistry();
-            getLogger().info("Registered PVE monster waves");
+            getLogger().info("PVE 몬스터들 등록됨");
 
             // Synergy manager
             this.synergyManager = new SynergyManager();
-            getLogger().info("SynergyManager initialized");
+            getLogger().info("시너지보너스 초기화 완료");
 
             // SQLite data manager
             this.dataManager = new SQLiteDataManager(this);
             if (!dataManager.initialize()) {
-                getLogger().severe("Failed to initialize SQLite database!");
+                getLogger().severe("SQLite 초기 세팅에 실패하였습니다!");
                 return false;
             }
 
             // Inventory GUI manager
             this.inventoryGUIManager = new InventoryGUIManager(this);
-            getLogger().info("InventoryGUIManager initialized");
+            getLogger().info("GUI 세팅됨");
 
             // Combat manager
             this.combatManager = new CombatManager(this);
@@ -154,9 +150,13 @@ public class MatoChessPlugin extends JavaPlugin {
             this.playerDataManager = new PlayerDataManager();
             getLogger().info("PlayerDataManager initialized");
 
-            // Arena manager
-            this.arenaManager = new ArenaManager(this);
-            getLogger().info("ArenaManager initialized");
+            // Template manager
+            this.boardTemplateManager = new BoardTemplateManager(this);
+            getLogger().info("TemplateManager initialized");
+
+            // Board instance manager (depends on TemplateManager)
+            this.boardInstanceManager = new BoardInstanceManager(this, boardTemplateManager);
+            getLogger().info("BoardInstanceManager initialized");
 
             // Queue GUI
             this.queueGUI = new QueueGUI(this);
@@ -165,6 +165,13 @@ public class MatoChessPlugin extends JavaPlugin {
             // Board setup listener
             this.boardSetupListener = new BoardSetupListener(this);
             getLogger().info("BoardSetupListener initialized");
+
+            // Shop GUI system
+            this.boardShopGUI = new com.matochess.gui.BoardShopGUI(this);
+            getLogger().info("BoardShopGUI initialized");
+
+            this.adminShopGUI = new com.matochess.gui.AdminShopGUI(this);
+            getLogger().info("AdminShopGUI initialized");
 
             return true;
 
@@ -180,9 +187,20 @@ public class MatoChessPlugin extends JavaPlugin {
     private void registerCommands() {
         getLogger().info("Registering commands...");
 
-        getCommand("mcqueue").setExecutor(new QueueCommand(this));
-        getCommand("mcstats").setExecutor(new StatsCommand(this));
-        getCommand("mcadmin").setExecutor(new AdminCommand(this));
+        QueueCommand queueCommand = new QueueCommand(this);
+        StatsCommand statsCommand = new StatsCommand(this);
+        AdminCommand adminCommand = new AdminCommand(this, adminShopGUI);
+        BoardCommand boardCommand = new BoardCommand(this, boardShopGUI);
+
+        MtChessCommand mtChessCommand = new MtChessCommand(this, queueCommand, statsCommand, adminCommand, boardCommand);
+
+        org.bukkit.command.PluginCommand main = getCommand("mtchess");
+        if (main != null) {
+            main.setExecutor(mtChessCommand);
+            main.setTabCompleter(mtChessCommand);
+        } else {
+            getLogger().severe("/mtchess command not found in plugin.yml - command registration skipped");
+        }
 
         getLogger().info("Commands registered successfully.");
     }
@@ -198,8 +216,16 @@ public class MatoChessPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new QueueGUIListener(this), this);
         getServer().getPluginManager().registerEvents(new InventoryGUIListener(this, inventoryGUIManager), this);
         getServer().getPluginManager().registerEvents(new ItemDropListener(this), this);
+        getServer().getPluginManager().registerEvents(new EquipmentPickupListener(this), this);
         getServer().getPluginManager().registerEvents(new CombatProtectionListener(this), this);
         getServer().getPluginManager().registerEvents(new WorldProtectionListener(this), this);
+        getServer().getPluginManager().registerEvents(new SpectatorReturnListener(this), this);
+
+        // Shop system listeners
+        getServer().getPluginManager().registerEvents(new com.matochess.listeners.BTItemListener(this), this);
+        getServer().getPluginManager().registerEvents(boardShopGUI, this);
+        getServer().getPluginManager().registerEvents(adminShopGUI, this);
+        getServer().getPluginManager().registerEvents(new com.matochess.listeners.ShopSetupListener(this, adminShopGUI), this);
 
         getLogger().info("Events registered successfully.");
     }
@@ -249,16 +275,20 @@ public class MatoChessPlugin extends JavaPlugin {
         return playerDataManager;
     }
 
-    public ArenaManager getArenaManager() {
-        return arenaManager;
-    }
-
     public QueueGUI getQueueGUI() {
         return queueGUI;
     }
 
     public BoardSetupListener getBoardSetupListener() {
         return boardSetupListener;
+    }
+
+    public BoardTemplateManager getTemplateManager() {
+        return boardTemplateManager;
+    }
+
+    public BoardInstanceManager getBoardInstanceManager() {
+        return boardInstanceManager;
     }
 
     /**

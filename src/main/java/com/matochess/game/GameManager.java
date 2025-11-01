@@ -6,8 +6,8 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Manages all active games
- * Handles game creation, lifecycle, and player management
+ * 모든 활성화된 게임을 관리합니다.
+ * 게임 생성, 생명주기, 플레이어 게임 참가를 관리합니다.
  */
 public class GameManager {
 
@@ -22,7 +22,7 @@ public class GameManager {
     }
 
     /**
-     * Create a new game instance
+     * 새 게임 인스턴스 생성
      */
     public GameInstance createGame(List<UUID> playerIds) {
         UUID gameId = UUID.randomUUID();
@@ -40,14 +40,14 @@ public class GameManager {
     }
 
     /**
-     * Get game by ID
+     * ID로 게임 찾기
      */
     public GameInstance getGame(UUID gameId) {
         return activeGames.get(gameId);
     }
 
     /**
-     * Get game that a player is in
+     * 플레이어가 진행 중인 게임 찾기
      */
     public GameInstance getPlayerGame(UUID playerId) {
         UUID gameId = playerToGame.get(playerId);
@@ -55,7 +55,7 @@ public class GameManager {
     }
 
     /**
-     * Remove a game
+     * 게임 삭제
      */
     public void removeGame(UUID gameId) {
         GameInstance game = activeGames.remove(gameId);
@@ -69,21 +69,21 @@ public class GameManager {
     }
 
     /**
-     * Check if player is in a game
+     * 게임에 특정 플레이어가 있는지 확인
      */
     public boolean isPlayerInGame(UUID playerId) {
         return playerToGame.containsKey(playerId);
     }
 
     /**
-     * Get all active games
+     * 모든 활성화된 게임 얻기
      */
     public Collection<GameInstance> getActiveGames() {
         return activeGames.values();
     }
 
     /**
-     * Shutdown all games
+     * 모든 게임 종료
      */
     public void shutdown() {
         plugin.getLogger().info("Shutting down " + activeGames.size() + " active games...");

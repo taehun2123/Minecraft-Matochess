@@ -3,8 +3,8 @@ package com.matochess.data;
 import lombok.Getter;
 
 /**
- * Represents a trait synergy bonus
- * Applied when certain number of units with same trait are on board
+ * 시너지 보너스
+ * 보드 내에 같은 시너지의 유닛이 존재하면 시너지 보너스를 부여합니다.
  */
 @Getter
 public class TraitBonus {
@@ -46,7 +46,7 @@ public class TraitBonus {
     }
 
     /**
-     * Types of bonuses that can be applied
+     * 부여할 수 있는 시너지 타입들
      */
     public enum BonusType {
         // 스탯 증가

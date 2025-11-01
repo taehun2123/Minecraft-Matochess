@@ -3,8 +3,8 @@ package com.matochess.data;
 import org.bukkit.ChatColor;
 
 /**
- * Represents player ranking tiers
- * From COPPER (lowest) to ENDER (highest)
+ * 플레이어의 랭킹 티어
+ * 구리 티어 ~ 엔더 티어까지 존재
  */
 public enum Tier {
     COPPER(1, ChatColor.RED, "구리"),
@@ -38,14 +38,14 @@ public enum Tier {
     }
 
     /**
-     * Get formatted tier name with color
+     * 포멧된 티어 이름과 색상을 얻습니다.
      */
     public String getFormattedName() {
         return color + displayName;
     }
 
     /**
-     * Get next tier, or null if already max
+     * null은 최고 티어임을 의미, 다음 티어를 얻습니다.
      */
     public Tier next() {
         if (this == ENDER) return null;
@@ -53,7 +53,7 @@ public enum Tier {
     }
 
     /**
-     * Get previous tier, or null if already min
+     * null은 최소 티어임을 의미, 이전 티어를 얻습니다.
      */
     public Tier previous() {
         if (this == COPPER) return null;

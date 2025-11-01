@@ -7,26 +7,10 @@ description: Auto Battler plugin for Minecraft inspired by TFT
 # Supports Minecraft 1.20.x and above (1.20.4, 1.21.x, etc.)
 
 commands:
-  matochess:
+  mtchess:
     description: Main MatoChess command
-    aliases: [mc, mato]
-    usage: /<command> [help|join|leave|stats]
-
-  mcqueue:
-    description: Join matchmaking queue
-    aliases: [queue, mcq]
-    usage: /<command>
-
-  mcstats:
-    description: View your stats and tier
-    aliases: [stats]
-    usage: /<command> [player]
-
-  mcadmin:
-    description: Admin commands for MatoChess
-    aliases: [mca]
-    usage: /<command> [reload|reset|debug]
-    permission: matochess.admin
+    aliases: [mc, mato, queue, mcqueue, mcq, board, mcboard, mcb, stats, mcstats, admin, mcadmin, mca, leave]
+    usage: /<command> [queue|board|stats|admin|help]
 
 permissions:
   matochess.admin:

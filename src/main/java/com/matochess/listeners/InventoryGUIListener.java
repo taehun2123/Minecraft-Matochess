@@ -1,6 +1,7 @@
 package com.matochess.listeners;
 
 import com.matochess.MatoChessPlugin;
+import com.matochess.data.Equipment;
 import com.matochess.data.GamePhase;
 import com.matochess.data.GamePlayer;
 import com.matochess.data.Position;
@@ -9,6 +10,7 @@ import com.matochess.game.GameInstance;
 import com.matochess.gui.InventoryGUIManager;
 import com.matochess.utils.NBTUtils;
 import org.bukkit.Material;
+import org.bukkit.Sound;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -93,8 +95,6 @@ public class InventoryGUIListener implements Listener {
         if (gamePlayer == null) return;
 
         String title = event.getView().getTitle();
-        int slot = event.getSlot();
-        ItemStack clickedItem = event.getCurrentItem();
 
         // 플레이어 목록 GUI
         if (title.contains("플레이어 목록")) {
@@ -104,8 +104,15 @@ public class InventoryGUIListener implements Listener {
 
         // 54칸 통합 GUI (마토체스)
         if (title.contains("마토체스")) {
-            event.setCancelled(true); // 모든 클릭 취소 (드래그 방지)
-            handleIntegratedGUIClick(player, gamePlayer, slot, event);
+            int rawSlot = event.getRawSlot();
+            if (rawSlot < event.getView().getTopInventory().getSize()) {
+                // 상단 54칸 GUI
+                event.setCancelled(true);
+                handleIntegratedGUIClick(player, gamePlayer, event.getSlot(), event);
+            } else {
+                // 플레이어 실제 인벤토리
+                handlePlayerInventoryClick(player, gamePlayer, event);
+            }
             return;
         }
     }
@@ -126,7 +133,7 @@ public class InventoryGUIListener implements Listener {
                 player.sendMessage("§c전투 중에는 병력을 배치할 수 없습니다!");
                 return;
             }
-            handleBoardSlotClick(player, gamePlayer, slot, item);
+            handleBoardSlotClick(player, gamePlayer, slot, item, event);
         }
         // 정보 패널 (9, 18, 27칸) - 클릭 무시
         else if (slot == 8 || slot == 17 || slot == 26) {
@@ -145,9 +152,13 @@ public class InventoryGUIListener implements Listener {
         else if (slot == 35) {
             // 정보 표시만
         }
-        // 필러 (37~45칸) - 클릭 무시
-        else if (slot >= 36 && slot <= 44) {
+        // 필러 (37~44칸) - 클릭 무시
+        else if (slot >= 36 && slot <= 43) {
             // 필러
+        }
+        // 항복 버튼 (45칸)
+        else if (slot == 44) {
+            handleSurrender(player, game, gamePlayer);
         }
         // 경험치 업 버튼 (46칸)
         else if (slot == 45) {
@@ -155,7 +166,7 @@ public class InventoryGUIListener implements Listener {
         }
         // 리롤 버튼 (47칸)
         else if (slot == 46) {
-            handleReroll(player, gamePlayer);
+            handleReroll(player, gamePlayer, event);
         }
         // 상점 유닛 (48~52칸)
         else if (slot >= 47 && slot <= 51) {
@@ -177,6 +188,48 @@ public class InventoryGUIListener implements Listener {
     }
 
     /**
+     * 플레이어 실제 인벤토리 클릭 처리 (핫바 제약 등)
+     */
+    private void handlePlayerInventoryClick(Player player, GamePlayer gamePlayer, InventoryClickEvent event) {
+        event.setCancelled(false);
+
+        ItemStack cursor = event.getCursor();
+        ItemStack current = event.getCurrentItem();
+
+        boolean cursorIsEquipment = NBTUtils.isEquipmentItem(cursor, plugin.getKey());
+        boolean currentIsEquipment = NBTUtils.isEquipmentItem(current, plugin.getKey());
+
+        int slot = event.getSlot();
+
+        // 핫바(0~8)에는 장비 보관 금지
+        if (slot >= 0 && slot <= 8 && (cursorIsEquipment || currentIsEquipment)) {
+            event.setCancelled(true);
+            player.sendMessage("§c장비는 핫바에 보관할 수 없습니다.");
+            return;
+        }
+
+        // Shift-클릭으로 장비 이동 제한
+        if (event.isShiftClick() && currentIsEquipment) {
+            event.setCancelled(true);
+            player.sendMessage("§c장비는 Shift-클릭으로 이동할 수 없습니다.");
+            return;
+        }
+
+        // 숫자 키(핫바 교체) 제한
+        if (event.getClick() == ClickType.NUMBER_KEY) {
+            int hotbarSlot = event.getHotbarButton();
+            if (hotbarSlot >= 0 && hotbarSlot <= 8) {
+                ItemStack hotbarItem = player.getInventory().getItem(hotbarSlot);
+                boolean hotbarIsEquipment = NBTUtils.isEquipmentItem(hotbarItem, plugin.getKey());
+                if (currentIsEquipment || hotbarIsEquipment) {
+                    event.setCancelled(true);
+                    player.sendMessage("§c장비는 핫바와 교체할 수 없습니다.");
+                }
+            }
+        }
+    }
+
+    /**
      * 배치판 슬롯인지 확인
      */
     private boolean isBoardSlot(int slot) {
@@ -189,12 +242,54 @@ public class InventoryGUIListener implements Listener {
     /**
      * 배치판 슬롯 클릭 처리
      */
-    private void handleBoardSlotClick(Player player, GamePlayer gamePlayer, int slot, ItemStack item) {
+    private void handleBoardSlotClick(Player player, GamePlayer gamePlayer, int slot, ItemStack item, InventoryClickEvent event) {
         // 슬롯을 Position으로 변환
         Position pos = slotToPosition(slot);
         if (pos == null) return;
 
-        Unit unitAtPos = gamePlayer.getBoard().get(pos);
+        Unit unitAtPos = gamePlayer.getBoardUnit(pos);
+
+        ItemStack cursor = event.getCursor();
+        boolean cursorIsEquipment = NBTUtils.isEquipmentItem(cursor, plugin.getKey());
+
+        if (cursorIsEquipment) {
+            if (unitAtPos == null) {
+                player.sendMessage("§c빈 칸에는 장비를 장착할 수 없습니다.");
+                return;
+            }
+
+            UUID equipmentInstanceId = NBTUtils.getEquipmentInstanceId(cursor, plugin.getKey());
+            if (equipmentInstanceId == null) {
+                player.sendMessage("§c장비 정보를 읽을 수 없습니다. 다시 시도하세요.");
+                return;
+            }
+
+            Equipment equipment = gamePlayer.removeEquipmentByInstanceId(equipmentInstanceId);
+            if (equipment == null) {
+                player.sendMessage("§c장비 저장소와 동기화되지 않았습니다. 인벤토리를 새로고침하세요.");
+                guiManager.refreshGameInventory(player, gamePlayer);
+                return;
+            }
+
+            if (!unitAtPos.addEquipment(equipment)) {
+                // 유닛 장비 슬롯이 가득 찼으니 되돌림
+                gamePlayer.addEquipment(equipment);
+                player.sendMessage("§c해당 유닛은 더 이상 장비를 장착할 수 없습니다.");
+                return;
+            }
+
+            unitAtPos.setCurrentHealth(unitAtPos.getHealth());
+            event.setCursor(new ItemStack(Material.AIR));
+            player.sendMessage("§d[장착 완료] §f" + unitAtPos.getName() + " §7→ §d" + equipment.getName());
+            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.8f, 1.4f);
+
+            GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+            if (game != null) {
+                game.updateGameDisplays();
+            }
+            guiManager.refreshGameInventory(player, gamePlayer);
+            return;
+        }
 
         if (unitAtPos != null) {
             // 배치된 유닛 클릭 - 벤치로 이동
@@ -247,7 +342,17 @@ public class InventoryGUIListener implements Listener {
      * 벤치 슬롯 클릭 처리
      */
     private void handleBenchSlotClick(Player player, GamePlayer gamePlayer, int slot, ItemStack item, InventoryClickEvent event, GamePhase currentPhase) {
-        if (item == null || item.getType() == Material.AIR || !NBTUtils.isUnitItem(item, plugin.getKey())) {
+        ItemStack cursor = event.getCursor();
+        boolean cursorIsEquipment = NBTUtils.isEquipmentItem(cursor, plugin.getKey());
+
+        if (item == null || item.getType() == Material.AIR) {
+            if (cursorIsEquipment) {
+                player.sendMessage("§c빈 벤치에는 장비를 장착할 수 없습니다.");
+            }
+            return;
+        }
+
+        if (!NBTUtils.isUnitItem(item, plugin.getKey())) {
             return;
         }
 
@@ -255,22 +360,73 @@ public class InventoryGUIListener implements Listener {
         UUID unitInstanceId = NBTUtils.getUnitInstanceId(item, plugin.getKey());
 
         // 벤치에서 해당 유닛 찾기
-        Unit selectedUnit = gamePlayer.getBench().stream()
-                .filter(unit -> unit.getInstanceId().equals(unitInstanceId))
-                .findFirst()
-                .orElse(null);
+        Unit selectedUnit = gamePlayer.getBenchUnit(unitInstanceId);
+
+        if (cursorIsEquipment) {
+            if (selectedUnit == null) {
+                player.sendMessage("§c유닛 정보를 찾을 수 없습니다.");
+                return;
+            }
+
+            UUID equipmentInstanceId = NBTUtils.getEquipmentInstanceId(cursor, plugin.getKey());
+            if (equipmentInstanceId == null) {
+                player.sendMessage("§c장비 정보를 읽을 수 없습니다. 다시 시도하세요.");
+                return;
+            }
+
+            Equipment equipment = gamePlayer.removeEquipmentByInstanceId(equipmentInstanceId);
+            if (equipment == null) {
+                player.sendMessage("§c장비 저장소와 동기화되지 않았습니다. 인벤토리를 새로고침하세요.");
+                guiManager.refreshGameInventory(player, gamePlayer);
+                return;
+            }
+
+            if (!selectedUnit.addEquipment(equipment)) {
+                gamePlayer.addEquipment(equipment);
+                player.sendMessage("§c해당 유닛은 더 이상 장비를 장착할 수 없습니다.");
+                return;
+            }
+
+            selectedUnit.setCurrentHealth(selectedUnit.getHealth());
+            event.setCursor(new ItemStack(Material.AIR));
+            player.sendMessage("§d[장착 완료] §f" + selectedUnit.getName() + " §7→ §d" + equipment.getName());
+            player.playSound(player.getLocation(), Sound.UI_BUTTON_CLICK, 0.8f, 1.4f);
+
+            GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
+            if (game != null) {
+                game.updateGameDisplays();
+            }
+            guiManager.refreshGameInventory(player, gamePlayer);
+            return;
+        }
 
         if (selectedUnit != null) {
             // Shift + 우클릭: 즉시 판매 (전투 중에도 가능)
             if (event.isRightClick() && event.isShiftClick()) {
-                int goldGained = gamePlayer.sellUnit(selectedUnit);
+                GamePlayer.SellResult result = gamePlayer.sellUnit(selectedUnit);
+                if (result == null) {
+                    player.sendMessage("§c유닛을 판매할 수 없습니다.");
+                    return;
+                }
+
+                int goldGained = result.getGoldGained();
                 player.sendMessage("§a유닛을 판매했습니다! §6+" + goldGained + "G");
+
+                for (Equipment equipment : result.getReclaimedEquipment()) {
+                    ItemStack equipmentItem = NBTUtils.createEquipmentItem(equipment, plugin.getKey());
+                    boolean stored = guiManager.tryAddEquipmentItemToInventory(player, equipmentItem);
+                    if (!stored) {
+                        player.sendMessage("§e장비 공간이 부족하여 장비 보관함에 보관되었습니다: §d" + equipment.getName());
+                    } else {
+                        player.sendMessage("§d장비 회수: §f" + equipment.getName());
+                    }
+                }
+
                 guiManager.setupGameInventory(player, gamePlayer);
                 // 스코어보드 업데이트 (시너지 변경)
                 GameInstance game = plugin.getGameManager().getPlayerGame(player.getUniqueId());
                 if (game != null) {
-                    game.// 모든 플레이어 스코어보드 업데이트 🚨 -> updateGameDisplays로 변경
-                            updateGameDisplays();
+                    game.updateGameDisplays();
                 }
             }
             // 좌클릭: 배치용으로 선택 (전투 중에는 이미 막힘)
@@ -312,7 +468,7 @@ public class InventoryGUIListener implements Listener {
      */
     private void handleXPBuy(Player player, GamePlayer gamePlayer) {
         int cost = plugin.getConfig().getInt("game.xp-cost-gold", 4);
-        int xpGain = plugin.getConfig().getInt("game.xp-per-purchase", 2);
+        int xpGain = plugin.getConfig().getInt("game.xp-per-purchase", 4);
 
         if (!gamePlayer.spendGold(cost)) {
             player.sendMessage("§c골드가 부족합니다! (필요: " + cost + "G)");
@@ -337,8 +493,43 @@ public class InventoryGUIListener implements Listener {
     /**
      * 상점 리롤
      */
-    private void handleReroll(Player player, GamePlayer gamePlayer) {
+    private void handleReroll(Player player, GamePlayer gamePlayer, InventoryClickEvent event) {
+        UUID playerId = player.getUniqueId();
+
+        if (event.isRightClick()) {
+            boolean locked = guiManager.toggleShopLock(playerId);
+            if (locked) {
+                player.sendMessage("§c상점이 잠금되었습니다. 좌클릭으로 새로고침할 수 없습니다.");
+            } else {
+                player.sendMessage("§a상점 잠금이 해제되었습니다.");
+            }
+            guiManager.setupGameInventory(player, gamePlayer);
+            return;
+        }
+
+        if (!event.isLeftClick() && !event.isShiftClick()) {
+            return;
+        }
+
         guiManager.rerollShop(player, gamePlayer);
+    }
+
+    /**
+     * 항복 처리
+     */
+    private void handleSurrender(Player player, GameInstance game, GamePlayer gamePlayer) {
+        if (game == null) {
+            player.sendMessage("§c게임에 참가 중이 아닙니다.");
+            return;
+        }
+
+        if (!gamePlayer.isAlive()) {
+            player.sendMessage("§c이미 탈락한 상태입니다.");
+            return;
+        }
+
+        player.closeInventory();
+        game.surrenderPlayer(player.getUniqueId());
     }
 
     /**
@@ -363,8 +554,6 @@ public class InventoryGUIListener implements Listener {
 
         UUID targetId = meta.getOwningPlayer().getUniqueId();
 
-        // 🚨 핵심 해결책: 인벤토리를 닫거나 다른 GUI를 열기 전에 커서의 아이템을 비운다.
-        // 현재 커서에 관전 플레이어 목록 아이콘이 들려있을 수 있다.
         if (event.getCursor() != null && event.getCursor().getType() != Material.AIR) {
             event.setCursor(new ItemStack(Material.AIR));
         }

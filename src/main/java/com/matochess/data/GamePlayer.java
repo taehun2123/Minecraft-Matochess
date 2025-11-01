@@ -8,8 +8,8 @@ import org.bukkit.entity.Player;
 import java.util.*;
 
 /**
- * Represents a player in an active game
- * Tracks their resources, units, level, and game state
+ * 게임에 참여 중인 단일 플레이어의 상태를 관리하는 데이터 클래스입니다.
+ * 자원, 벤치/배치 유닛, 장비, 라운드 성적 등의 정보를 모두 보관합니다.
  */
 @Getter @Setter
 public class GamePlayer {
@@ -42,7 +42,7 @@ public class GamePlayer {
     private final List<Equipment> equipmentStorage; // 장비 보관함
 
     // Board configuration
-    private static final int BENCH_SIZE = 9;
+    private static final int BENCH_SIZE = 8;
     private static final int BOARD_WIDTH = 8;
     private static final int BOARD_HEIGHT = 3; // 플레이어는 8*3 영역에만 배치 가능
 
@@ -66,32 +66,24 @@ public class GamePlayer {
     }
 
     /**
-     * Get maximum units that can be placed on board based on level
+     * 레벨에 따른 최대 유닛 배치 수
      */
     public int getMaxBoardUnits() {
-        return switch (level) {
-            case 1 -> 2;
-            case 2 -> 2;
-            case 3 -> 3;
-            case 4 -> 4;
-            case 5 -> 5;
-            case 6 -> 6;
-            case 7 -> 7;
-            case 8 -> 8;
-            default -> 2;
-        };
+        int maxSlots = BOARD_WIDTH * BOARD_HEIGHT;
+        int allowed = Math.max(1, level);
+        return Math.min(maxSlots, allowed);
     }
 
     /**
-     * Add gold to player
+     * 유저에게 골드 추가
      */
     public void addGold(int amount) {
         this.gold += amount;
     }
 
     /**
-     * Try to spend gold
-     * @return true if successful, false if not enough gold
+     * 골드 사용
+     * @return true 성공적으로 수행됨, false 면 충분하지 않은 골드
      */
     public boolean spendGold(int amount) {
         if (gold < amount) {
@@ -102,8 +94,8 @@ public class GamePlayer {
     }
 
     /**
-     * Add experience and check for level up
-     * @return true if leveled up, false otherwise
+     * 경험치 추가 및 레벨업 체크 로직
+     * @return true 면 레벨업, false 면 그렇지 않음
      */
     public boolean addExperience(int amount, int[] xpRequiredPerLevel) {
         experience += amount;
@@ -122,8 +114,8 @@ public class GamePlayer {
     }
 
     /**
-     * Take damage
-     * @return true if player is still alive, false if eliminated
+     * 데미지 부여
+     * @return true 면 플레이어는 여전히 살아있음, false 면 제거됨.
      */
     public boolean takeDamage(int damage) {
         health -= damage;
@@ -135,8 +127,8 @@ public class GamePlayer {
     }
 
     /**
-     * Add unit to bench
-     * @return true if successful, false if bench is full
+     * 유닛을 벤치로 보내기
+     * @return true 면 성공적 수행, false 면 벤치가 가득 참
      */
     public boolean addUnitToBench(Unit unit) {
         if (bench.size() >= BENCH_SIZE) {
@@ -151,15 +143,15 @@ public class GamePlayer {
     }
 
     /**
-     * Remove unit from bench
+     * 벤치에서부터 유닛 제거
      */
     public boolean removeUnitFromBench(Unit unit) {
         return bench.remove(unit);
     }
 
     /**
-     * Place unit on board
-     * @return true if successful, false if position occupied or max units reached
+     * 보드에 유닛 놓기
+     * @return true 면 성공적, false 면 배치 인원이 가득 찼거나 최대 유닛에 도달함
      */
     public boolean placeUnitOnBoard(Unit unit, Position position) {
         if (board.size() >= getMaxBoardUnits()) {
@@ -173,24 +165,24 @@ public class GamePlayer {
     }
 
     /**
-     * Alias for placeUnitOnBoard - used by inventory GUI
+     * Alias for placeUnitOnBoard - used by inventory GUI ( 인벤토리 GUI 배치판 )
      */
     public boolean placeUnit(Unit unit, Position position) {
         return placeUnitOnBoard(unit, position);
     }
 
     /**
-     * Remove unit from board
+     * 현재 배치판에서 해당 좌표의 유닛을 직접 참조로 반환
      */
-    public Unit removeUnitFromBoard(Position position) {
-        return board.remove(position);
+    public Unit getBoardUnit(Position position) {
+        return board.get(position);
     }
 
     /**
-     * Get unit at position
+     * 배치판에서부터 유닛 제거
      */
-    public Unit getUnitAt(Position position) {
-        return board.get(position);
+    public Unit removeUnitFromBoard(Position position) {
+        return board.remove(position);
     }
 
     /**
@@ -208,100 +200,139 @@ public class GamePlayer {
     }
 
     /**
-     * Check for units that can be combined and auto-upgrade (벤치 + 보드의 모든 유닛 포함)
-     * 준비 단계에서만 호출되어야 함
-     * @return number of units upgraded
+     * 벤치 + (옵션에 따라) 보드 유닛의 합성 조건을 검사하고 자동으로 업그레이드합니다.
+     * 준비 단계에서는 includeBoardUnits=true 로 호출되어 보드 우선 합성을 수행하고,
+     * 전투 중에는 벤치 유닛만 합성하도록 false 로 호출합니다.
+     * @return 합성이 일어난 횟수
      */
     public int autoUpgradeUnits() {
-        Map<String, List<Unit>> unitsByIdAndLevel = new HashMap<>();
+        return autoUpgradeUnits(true);
+    }
 
-        // 벤치의 모든 유닛을 그룹화
-        for (Unit unit : bench) {
-            String key = unit.getId() + "_" + unit.getLevel().getLevel();
-            unitsByIdAndLevel.computeIfAbsent(key, k -> new ArrayList<>()).add(unit);
-        }
+    /**
+     * 내부 합성 루틴. includeBoardUnits 가 false 면 벤치끼리만 합성됩니다.
+     * 연속적인 합성을 보장하기 위해 do-while 루프를 사용합니다.
+     */
+    public int autoUpgradeUnits(boolean includeBoardUnits) {
+        int totalUpgraded = 0;
+        boolean madeUpgrade;
 
-        // 보드의 모든 유닛도 그룹화 (전장에 나가있는 병력 포함)
-        for (Unit unit : board.values()) {
-            String key = unit.getId() + "_" + unit.getLevel().getLevel();
-            unitsByIdAndLevel.computeIfAbsent(key, k -> new ArrayList<>()).add(unit);
-        }
+        do {
+            madeUpgrade = false; // 이번 루프에서 합성이 일어났는지 추적
 
-        int upgraded = 0;
-        for (List<Unit> units : unitsByIdAndLevel.values()) {
-            while (units.size() >= 3) {
-                // 우선순위: 보드에 있는 유닛을 base로 선택 (업그레이드 후 보드에 유지하기 위해)
-                Unit base = null;
-                Position basePos = null;
+            // 1. 매번 반복 시마다 벤치와 보드의 현재 유닛 목록으로 그룹을 재구성
+            Map<String, List<Unit>> unitsByIdAndLevel = new HashMap<>();
 
-                // 보드에 있는 유닛을 먼저 찾아서 base로 설정
-                for (Unit unit : units) {
-                    Position pos = findUnitPosition(unit);
-                    if (pos != null) {
-                        base = unit;
-                        basePos = pos;
-                        break;
-                    }
+            // 벤치의 모든 유닛을 그룹화
+            for (Unit unit : bench) {
+                String key = unit.getId() + "_" + unit.getLevel().getLevel();
+                unitsByIdAndLevel.computeIfAbsent(key, k -> new ArrayList<>()).add(unit);
+            }
+
+            // 보드의 모든 유닛도 그룹화
+            if (includeBoardUnits) {
+                for (Unit unit : board.values()) {
+                    String key = unit.getId() + "_" + unit.getLevel().getLevel();
+                    unitsByIdAndLevel.computeIfAbsent(key, k -> new ArrayList<>()).add(unit);
                 }
+            }
 
-                // 보드에 유닛이 없으면 첫 번째 유닛(벤치)을 base로
-                if (base == null) {
-                    base = units.get(0);
-                }
+            // ConcurrentModificationException을 방지하기 위해 values()의 사본을 만듭니다.
+            // 이 사본을 반복하는 동안 원본 맵(unitsByIdAndLevel)은 변경되지 않지만,
+            // 유닛 리스트(units)는 while 루프 내에서 변경됩니다.
+            Collection<List<Unit>> currentGroups = new ArrayList<>(unitsByIdAndLevel.values());
 
-                // base를 제외한 나머지 2개 선택
-                units.remove(base);
-                Unit second = units.remove(0);
-                Unit third = units.remove(0);
+            // 2. 각 그룹을 반복하여 합성 시도
+            for (List<Unit> units : currentGroups) {
+                // 이 그룹에서 3개 이상 유닛이 될 때까지 계속 합성 시도
+                while (units.size() >= 3) {
+                    // 우선순위: 보드에 있는 유닛을 base로 선택 (업그레이드 후 보드에 유지하기 위해)
+                    Unit base = null;
+                    Position basePos = null;
 
-                // Transfer equipment from combined units
-                List<Equipment> allEquipment = new ArrayList<>();
-                allEquipment.addAll(base.removeAllEquipment());
-                allEquipment.addAll(second.removeAllEquipment());
-                allEquipment.addAll(third.removeAllEquipment());
-
-                // second와 third를 벤치와 보드에서 제거
-                bench.remove(second);
-                bench.remove(third);
-
-                Position secondPos = findUnitPosition(second);
-                Position thirdPos = findUnitPosition(third);
-                if (secondPos != null) board.remove(secondPos);
-                if (thirdPos != null) board.remove(thirdPos);
-
-                // base가 벤치에 있으면 제거 (보드에 있으면 그대로 유지)
-                if (basePos == null) {
-                    bench.remove(base);
-                }
-
-                // Upgrade base unit
-                if (base.upgrade()) {
-                    // base가 벤치에 있었다면 다시 벤치에 추가
-                    if (basePos == null) {
-                        bench.add(base);
-                    }
-                    // base가 보드에 있었다면 이미 board에 남아있음 (위치 유지)
-
-                    // Re-add equipment (up to max)
-                    for (Equipment eq : allEquipment) {
-                        if (!base.addEquipment(eq)) {
-                            equipmentStorage.add(eq);
+                    if (includeBoardUnits) {
+                        // 보드에 있는 유닛을 먼저 찾아서 base로 설정
+                        for (Unit unit : units) {
+                            Position pos = findUnitPosition(unit);
+                            if (pos != null) {
+                                base = unit;
+                                basePos = pos;
+                                break;
+                            }
                         }
                     }
-                    upgraded++;
 
-                    // 플레이어에게 알림
-                    if (player != null && player.isOnline()) {
-                        String locationMsg = basePos != null ? " §7(보드 유지)" : " §7(벤치)";
-                        player.sendMessage("§a§l✦ 자동 합성! §r§e" + base.getName() + " §7→ §6" +
-                                         base.getLevel().getDisplay() + " " + base.getName() + locationMsg);
-                        player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
+                    // 보드에 유닛이 없으면 첫 번째 유닛(벤치)을 base로
+                    if (base == null) {
+                        base = units.get(0);
+                    }
+
+                    // base를 제외한 나머지 2개 선택
+                    units.remove(base);
+                    Unit second = units.remove(0);
+                    Unit third = units.remove(0);
+
+                    // Transfer equipment from combined units
+                    List<Equipment> allEquipment = new ArrayList<>();
+                    allEquipment.addAll(base.removeAllEquipment());
+                    allEquipment.addAll(second.removeAllEquipment());
+                    allEquipment.addAll(third.removeAllEquipment());
+
+                    // second와 third를 벤치와 보드에서 제거
+                    bench.remove(second);
+                    bench.remove(third);
+
+                    Position secondPos = findUnitPosition(second);
+                    Position thirdPos = findUnitPosition(third);
+                    if (secondPos != null) board.remove(secondPos);
+                    if (thirdPos != null) board.remove(thirdPos);
+
+                    // base가 벤치에 있으면 제거 (보드에 있으면 그대로 유지)
+                    if (basePos == null) {
+                        bench.remove(base);
+                    }
+
+                    // Upgrade base unit
+                    if (base.upgrade()) {
+                        base.setCurrentHealth(base.getHealth());
+
+                        // 업그레이드 후 유닛을 제자리에 다시 배치하거나 벤치에 추가
+                        if (basePos == null) {
+                            bench.add(base);
+                        } else {
+                            board.put(basePos, base);
+                        }
+
+                        // Re-add equipment (up to max)
+                        for (Equipment eq : allEquipment) {
+                            if (!base.addEquipment(eq)) {
+                                equipmentStorage.add(eq);
+                            }
+                        }
+
+                        madeUpgrade = true; // 🚨 합성이 일어났음을 표시
+                        totalUpgraded++;
+
+                        // 🚨 연속 합성을 위해: 업그레이드된 유닛을 현재 리스트(units)에 다시 추가하여
+                        // while 루프 조건을 다시 검사하게 합니다.
+                        // (이 유닛은 다음 do-while 루프에서 새로운 레벨 그룹으로 올바르게 재분류됩니다.)
+                        units.add(base);
+
+                        // 플레이어에게 알림
+                        if (player != null && player.isOnline()) {
+                            String locationMsg = basePos != null ? " §7(보드 유지)" : " §7(벤치)";
+                            player.sendMessage("§a§l✦ 자동 합성! §r§e" + base.getName() + " §7→ §6" +
+                                    base.getLevel().getDisplay() + " " + base.getName() + locationMsg);
+                            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_PLAYER_LEVELUP, 1.0f, 1.5f);
+                        }
                     }
                 }
             }
-        }
 
-        return upgraded;
+            // 3. 합성이 발생했다면, 전체 유닛 목록을 다시 그룹화하여 재검사
+        } while (madeUpgrade);
+
+        return totalUpgraded;
     }
 
     /**
@@ -317,7 +348,7 @@ public class GamePlayer {
     }
 
     /**
-     * Record a win
+     * 승리 기록
      */
     public void recordWin() {
         winStreak++;
@@ -326,7 +357,7 @@ public class GamePlayer {
     }
 
     /**
-     * Record a loss
+     * 패배 기록
      */
     public void recordLoss() {
         loseStreak++;
@@ -335,14 +366,14 @@ public class GamePlayer {
     }
 
     /**
-     * Get win streak bonus gold (max 5)
+     * 연승보너스 골드 (max 5)
      */
     public int getWinStreakBonus() {
         return Math.min(winStreak, 5);
     }
 
     /**
-     * Get lose streak bonus gold (max 5)
+     * 연패 보너스 골드 (max 5)
      * 연패 시에도 골드를 지급하여 약한 플레이어에게 기회 제공
      */
     public int getLoseStreakBonus() {
@@ -350,14 +381,14 @@ public class GamePlayer {
     }
 
     /**
-     * Sell a unit from bench and get gold refund
-     * Equipment is returned to storage
-     * @return gold refunded, or 0 if unit not found
+     * 벤치에 있는 유닛을 판매하여 골드를 얻습니다.
+     * 장비는 회수되어 장비 보관함에 저장되며, 반환 정보가 함께 제공됩니다.
+     * @return 판매 결과 객체, 유닛이 존재하지 않는다면 null
      */
-    public int sellUnit(Unit unit) {
-        // Check if unit is on bench
+    public SellResult sellUnit(Unit unit) {
+        // 유닛이 벤치에 있는지 확인합니다.
         if (!bench.contains(unit)) {
-            // Check if unit is on board
+            // 유닛이 보드에 있는지 확인합니다.
             Position positionToRemove = null;
             for (Map.Entry<Position, Unit> entry : board.entrySet()) {
                 if (entry.getValue().equals(unit)) {
@@ -369,17 +400,18 @@ public class GamePlayer {
             if (positionToRemove != null) {
                 board.remove(positionToRemove);
             } else {
-                return 0; // Unit not found
+                // 유닛을 찾을 수 없을 때
+                return null;
             }
         } else {
             bench.remove(unit);
         }
 
-        // Return equipment to storage
+        // 장비를 장비 보관함(인벤토리)에 보관합니디.(회수)
         List<Equipment> equipment = unit.removeAllEquipment();
         equipmentStorage.addAll(equipment);
 
-        // Calculate sell price based on all units used in upgrades
+        // 유닛 코스트를 계산하여 골드 지급하는 로직
         // 1성 = cost * 1 (유닛 1개)
         // 2성 = cost * 3 (유닛 3개 합성)
         // 3성 = cost * 9 (2성 3개 합성 = 유닛 9개)
@@ -389,7 +421,7 @@ public class GamePlayer {
         int sellPrice = unit.getCost() * unitsUsed;
 
         addGold(sellPrice);
-        return sellPrice;
+        return new SellResult(sellPrice, new ArrayList<>(equipment));
     }
 
     public UUID getPlayerId() {
@@ -418,6 +450,10 @@ public class GamePlayer {
 
     public int getHealth() {
         return health;
+    }
+
+    public void setHealth(int health) {
+        this.health = Math.max(0, health);
     }
 
     public int getWinStreak() {
@@ -452,8 +488,74 @@ public class GamePlayer {
         return new HashMap<>(board);
     }
 
+    public void clearAllUnits() {
+        board.clear();
+        bench.clear();
+        equipmentStorage.clear();
+    }
+
     public List<Equipment> getEquipmentStorage() {
         return new ArrayList<>(equipmentStorage);
+    }
+
+    /**
+     * 유닛 판매 결과 데이터
+     */
+    public static class SellResult {
+        private final int goldGained;
+        private final List<Equipment> reclaimedEquipment;
+
+        public SellResult(int goldGained, List<Equipment> reclaimedEquipment) {
+            this.goldGained = goldGained;
+            this.reclaimedEquipment = reclaimedEquipment;
+        }
+
+        public int getGoldGained() {
+            return goldGained;
+        }
+
+        public List<Equipment> getReclaimedEquipment() {
+            return reclaimedEquipment;
+        }
+    }
+
+    /**
+     * 저장된 장비 중 Instance ID로 조회
+     */
+    public Equipment getEquipmentByInstanceId(UUID instanceId) {
+        for (Equipment equipment : equipmentStorage) {
+            if (equipment.getInstanceId().equals(instanceId)) {
+                return equipment;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Instance ID로 장비를 제거하면서 반환
+     */
+    public Equipment removeEquipmentByInstanceId(UUID instanceId) {
+        Iterator<Equipment> iterator = equipmentStorage.iterator();
+        while (iterator.hasNext()) {
+            Equipment equipment = iterator.next();
+            if (equipment.getInstanceId().equals(instanceId)) {
+                iterator.remove();
+                return equipment;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 벤치에서 Instance ID로 유닛 검색
+     */
+    public Unit getBenchUnit(UUID unitInstanceId) {
+        for (Unit unit : bench) {
+            if (unit.getInstanceId().equals(unitInstanceId)) {
+                return unit;
+            }
+        }
+        return null;
     }
 
     public int getRoundsWon() {
@@ -462,51 +564,5 @@ public class GamePlayer {
 
     public int getRoundsLost() {
         return roundsLost;
-    }
-
-    /**
-     * Represents a position on the game board
-     */
-    public static class BoardPosition {
-        private final int x;
-        private final int y;
-
-        public BoardPosition(int x, int y) {
-            if (x < 0 || x >= BOARD_WIDTH || y < 0 || y >= BOARD_HEIGHT) {
-                throw new IllegalArgumentException("Invalid board position: " + x + ", " + y);
-            }
-            this.x = x;
-            this.y = y;
-        }
-
-        public int getX() {
-            return x;
-        }
-
-        public int getY() {
-            return y;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            BoardPosition that = (BoardPosition) o;
-            return x == that.x && y == that.y;
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(x, y);
-        }
-
-        @Override
-        public String toString() {
-            return "(" + x + ", " + y + ")";
-        }
-
-        public static boolean isValid(int x, int y) {
-            return x >= 0 && x < BOARD_WIDTH && y >= 0 && y < BOARD_HEIGHT;
-        }
     }
 }

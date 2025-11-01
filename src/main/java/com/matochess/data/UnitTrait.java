@@ -8,7 +8,9 @@ import org.bukkit.ChatColor;
  */
 public enum UnitTrait {
     // 종족 특성
+    CAVE("동굴", ChatColor.DARK_BLUE, "동굴에서 숨 참으며 살았던 자들"),
     UNDEAD("언데드", ChatColor.DARK_GREEN, "죽음을 두려워하지 않는 자들"),
+    VILLAGER("주민", ChatColor.GOLD, "한 때는 평범한 주민이였던 존재들"),
     NETHER("네더", ChatColor.DARK_RED, "지옥에서 온 존재들"),
     OCEAN("바다", ChatColor.AQUA, "깊은 바다의 생명체"),
     CONSTRUCT("구조물", ChatColor.GRAY, "인공적으로 만들어진 존재"),

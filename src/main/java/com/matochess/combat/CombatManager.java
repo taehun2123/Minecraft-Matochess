@@ -25,7 +25,7 @@ public class CombatManager {
     /**
      * 두 플레이어 간의 PVP 전투 시작
      */
-    public void startPVPCombat(GamePlayer player1, GamePlayer player2) {
+    public void startPVPCombat(GamePlayer player1, GamePlayer player2, Runnable completionCallback) {
         UUID combatId = UUID.randomUUID();
 
         // 🚨 핵심 1: 전투가 벌어질 아레나를 결정합니다. (여기서는 player1의 아레나를 사용)
@@ -39,25 +39,29 @@ public class CombatManager {
         var gameInstance = plugin.getGameManager().getGame(gameId); // GameManager에 getGame()이 있다고 가정합니다.
         if (gameInstance == null) return;
 
-        var combatArena = gameInstance.getPlayerArena(player1.getPlayerId());
+        var combatArena = gameInstance.getPlayerBoard(player1.getPlayerId());
         if (combatArena == null) {
             plugin.getLogger().severe("Could not find arena for player1!");
             return;
         }
 
         // CombatInstance에 아레나 정보를 전달합니다. (CombatInstance 생성자 수정 필요)
-        CombatInstance combat = new CombatInstance(plugin, combatId, player1, player2, combatArena);
+        CombatInstance combat = new CombatInstance(plugin, combatId, player1, player2, combatArena, completionCallback);
         activeCombats.put(combatId, combat);
         combat.start();
 
+        // 전투 유닛 스폰 후 프리뷰 유닛 제거 (전투 보드에 영향 없음)
+        gameInstance.clearAllPreviewUnits(player1.getPlayerId());
+        gameInstance.clearAllPreviewUnits(player2.getPlayerId());
+
         plugin.getLogger().info("Started PVP combat: " + player1.getPlayer().getName() +
-                " vs " + player2.getPlayer().getName() + " at Arena " + combatArena.getId());
+                " vs " + player2.getPlayer().getName() + " at Arena " + combatArena.getPlayerId());
     }
 
     /**
      * 몬스터와의 PVE 전투 시작
      */
-    public void startPVECombat(GamePlayer player, int round) {
+    public void startPVECombat(GamePlayer player, int round, Runnable completionCallback) {
         UUID combatId = UUID.randomUUID();
 
         // 🚨 핵심 2: PVE도 player의 아레나를 전투 장소로 지정합니다.
@@ -70,15 +74,18 @@ public class CombatManager {
         var gameInstance = plugin.getGameManager().getGame(gameId);
         if (gameInstance == null) return;
 
-        var combatArena = gameInstance.getPlayerArena(player.getPlayerId());
+        var combatArena = gameInstance.getPlayerBoard(player.getPlayerId());
         if (combatArena == null) {
             plugin.getLogger().severe("Could not find arena for PVE player!");
             return;
         }
 
-        CombatInstance combat = new CombatInstance(plugin, combatId, player, round, combatArena);
+        CombatInstance combat = new CombatInstance(plugin, combatId, player, round, combatArena, completionCallback);
         activeCombats.put(combatId, combat);
         combat.start();
+
+        // 전투 유닛 스폰 후 프리뷰 유닛 제거
+        gameInstance.clearAllPreviewUnits(player.getPlayerId());
 
         plugin.getLogger().info("Started PVE combat for: " + player.getPlayer().getName() +
                                " (Round " + round + ")");
@@ -148,13 +155,11 @@ public class CombatManager {
         double baseDamage = attacker.getAttackDamage() * skillMultiplier;
         double resistance;
 
-        // 스킬은 항상 마법 공격 타입으로 계산 (변경 가능)
+        // 공격 타입에 따라 방어력/마법저항력 선택
         if (attacker.getAttackType() == com.matochess.data.AttackType.MAGICAL) {
             resistance = defender.getMagicResist();
-        } else {
-            // 물리 유닛의 스킬도 방어력 무시하고 마법 저항력에 영향받도록 설정
-            // (게임 디자인에 따라 변경 가능)
-            resistance = defender.getMagicResist();
+        } else { // PHYSICAL
+            resistance = defender.getArmor();
         }
 
         double damageMultiplier = 100.0 / (100.0 + resistance);

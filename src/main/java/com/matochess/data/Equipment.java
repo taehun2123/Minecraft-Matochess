@@ -7,8 +7,8 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Represents equipment (장비) that can be equipped on units
- * Equipment provides stat bonuses to units
+ * 유닛에게 작용이 가능한 장비 데이터 라인입니다. (미구현)
+ * 장비를 착용한 유닛은 스텟을 추가 부여받습니다.
  */
 public class Equipment {
 
@@ -27,21 +27,21 @@ public class Equipment {
     }
 
     /**
-     * Add a stat bonus to this equipment
+     * 해당 장비에 보너스 스텟 부여
      */
     public void addStatBonus(StatType statType, double value) {
         statBonuses.put(statType, statBonuses.getOrDefault(statType, 0.0) + value);
     }
 
     /**
-     * Get the bonus for a specific stat type
+     * 특정 스텟타입으로 보너스 정보 열람
      */
     public double getStatBonus(StatType statType) {
         return statBonuses.getOrDefault(statType, 0.0);
     }
 
     /**
-     * Create a copy of this equipment
+     * 장비의 사본 복사
      */
     public Equipment copy() {
         Equipment copy = new Equipment(id, name, material);
@@ -71,7 +71,7 @@ public class Equipment {
     }
 
     /**
-     * Enum for different stat types that equipment can modify
+     * 장비가 가질 수 있는 스텟 타입을 나열하는 enum 타입
      */
     public enum StatType {
         HEALTH("체력"),

@@ -4,20 +4,27 @@ import com.matochess.MatoChessPlugin;
 import com.matochess.combat.CombatInstance;
 import com.matochess.core.SynergyManager;
 import com.matochess.data.*;
+import net.md_5.bungee.api.ChatMessageType;
+import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.*;
 import org.bukkit.boss.BarColor;
 import org.bukkit.boss.BarStyle;
 import org.bukkit.boss.BossBar;
+import org.bukkit.entity.Item;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.scoreboard.*;
 
 import java.util.*;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 import java.util.stream.Collectors;
 
 /**
- * Represents a single game instance with 8 players
- * Manages rounds, phases, and game flow
+ * 하나의 게임 세션을 표현하는 컨트롤러 역할 클래스입니다.
+ * 라운드 전환, 전투 매칭, 자원 배분, 탈락 처리 등 전체 흐름을 조율합니다.
  */
 public class GameInstance {
 
@@ -26,8 +33,12 @@ public class GameInstance {
     private final Map<UUID, GamePlayer> players;
     private final List<UUID> playerIds;
 
-    // 각 플레이어에게 할당된 아레나
-    private final Map<UUID, Arena> playerArenas;
+    // 각 플레이어에게 할당된 보드 인스턴스
+    private final Map<UUID, com.matochess.board.BoardInstance> playerBoards;
+
+    // 플레이어 원본 탭/스코어보드 복구용 저장소
+    private final Map<UUID, String> originalPlayerListNames;
+    private final Map<UUID, Scoreboard> originalScoreboards;
 
     private GamePhase currentPhase;
     private int currentRound;
@@ -46,6 +57,13 @@ public class GameInstance {
 
     // 준비 단계 실시간 유닛 프리뷰 관리 (플레이어별)
     private final Map<UUID, BoardManager> previewBoardManagers;
+    private final Map<UUID, java.util.concurrent.CompletableFuture<Void>> pendingBoardPreparations;
+
+    // 현재 진행 중인 전투 수
+    private int activeCombats;
+
+    // 준비 단계까지 회수되지 않은 드랍 아이템 추적
+    private final Map<UUID, List<PendingDrop>> pendingGroundDrops;
 
     // Configuration from config.yml
     private final int preparationTime;
@@ -62,10 +80,14 @@ public class GameInstance {
         this.gameId = gameId;
         this.playerIds = new ArrayList<>(playerIds);
         this.players = new HashMap<>();
-        this.playerArenas = new HashMap<>();
+        this.playerBoards = new ConcurrentHashMap<>();
         this.playerScoreboards = new HashMap<>();
+        this.originalPlayerListNames = new HashMap<>();
+        this.originalScoreboards = new HashMap<>();
         this.currentMatchups = new HashMap<>();
-        this.previewBoardManagers = new HashMap<>();
+        this.previewBoardManagers = new ConcurrentHashMap<>();
+        this.pendingBoardPreparations = new ConcurrentHashMap<>();
+        this.pendingGroundDrops = new HashMap<>();
         this.currentPhase = GamePhase.WAITING;
         this.currentRound = 0;
 
@@ -73,7 +95,7 @@ public class GameInstance {
         this.bossBar = Bukkit.createBossBar("§6준비 중...", BarColor.YELLOW, BarStyle.SOLID);
         this.bossBar.setVisible(true);
 
-        // Load configuration
+        // 설정 로딩
         this.preparationTime = plugin.getConfig().getInt("game.preparation-time", 30);
         this.combatTime = plugin.getConfig().getInt("game.combat-time", 60);
         this.startingGold = plugin.getConfig().getInt("game.starting-gold", 5);
@@ -82,36 +104,50 @@ public class GameInstance {
         this.goldPerRound = plugin.getConfig().getInt("game.gold-per-round", 1);
         this.xpPerRound = plugin.getConfig().getInt("game.xp-per-round", 2);
 
-        // Load XP requirements
+        // XP 조건 로딩
         this.xpRequired = new int[9];
         for (int i = 1; i <= 8; i++) {
             xpRequired[i] = plugin.getConfig().getInt("game.xp-required." + i, i * 2);
         }
 
+        this.activeCombats = 0;
         initializePlayers();
     }
 
     /**
-     * Initialize game players
+     * 게임 플레이어 초기화
      */
     private void initializePlayers() {
+        // 모든 플레이어의 로딩된 보드판
+        List<java.util.concurrent.CompletableFuture<Void>> loadFutures = new ArrayList<>();
+
         for (UUID playerId : playerIds) {
             Player player = Bukkit.getPlayer(playerId);
             if (player != null && player.isOnline()) {
                 GamePlayer gamePlayer = new GamePlayer(player, gameId, startingGold, startingLevel, startingHp);
                 players.put(playerId, gamePlayer);
 
-                // 각 플레이어에게 아레나 할당
-                Optional<Arena> arena = plugin.getArenaManager().allocateArena();
-                if (arena.isPresent()) {
-                    playerArenas.put(playerId, arena.get());
-                    plugin.getLogger().info("Player " + player.getName() + " assigned to arena " + arena.get().getId());
+                // 기존 탭 이름 및 스코어보드 저장 (게임 종료 시 복구)
+                originalPlayerListNames.put(playerId, player.getPlayerListName());
+                originalScoreboards.put(playerId, player.getScoreboard());
 
-                    // 실시간 프리뷰용 BoardManager 생성
-                    previewBoardManagers.put(playerId, new BoardManager(plugin));
-                } else {
-                    plugin.getLogger().warning("No arena available for player " + player.getName());
-                }
+                // 플레이어의 로드판 로딩 (async)
+                java.util.concurrent.CompletableFuture<Void> future = plugin.getBoardInstanceManager()
+                    .loadPlayerBoard(playerId)
+                    .thenAccept(boardInstance -> {
+                        playerBoards.put(playerId, boardInstance);
+                        plugin.getLogger().info("Player " + player.getName() + " assigned to board at index " +
+                            boardInstance.getData().getPositionIndex());
+
+                        // 실시간 프리뷰용 BoardManager 생성
+                        previewBoardManagers.put(playerId, new BoardManager(plugin));
+                    })
+                    .exceptionally(error -> {
+                        plugin.getLogger().warning("Failed to load board for player " + player.getName() + ": " + error.getMessage());
+                        return null;
+                    });
+
+                loadFutures.add(future);
 
                 // 플레이어에게 보스바 표시
                 bossBar.addPlayer(player);
@@ -120,21 +156,26 @@ public class GameInstance {
                 setupScoreboard(player, gamePlayer);
             }
         }
+
+        // 게임 시작 전 모든 보드판이 로딩될 때까지 대기
+        java.util.concurrent.CompletableFuture.allOf(loadFutures.toArray(new java.util.concurrent.CompletableFuture[0]))
+            .thenRun(() -> {
+                plugin.getLogger().info("All player boards loaded for game " + gameId);
+                // 보드 로딩이 완료된 후에만 게임 시작
+                Bukkit.getScheduler().runTask(plugin, this::startGame);
+            });
     }
 
     /**
      * Start the game
      */
-    public void startGame() {
+    private void startGame() {
         currentPhase = GamePhase.STARTING;
         currentRound = 1;
 
         // Teleport all players to lobby spawn
         teleportPlayersToLobby();
-
-        // 모든 플레이어에게 알림
         broadcast("&a게임 시작! 라운드 1이 시작됩니다...");
-
         // Start first round
         Bukkit.getScheduler().runTaskLater(plugin, this::startPreparationPhase, 60L); // 3 seconds
     }
@@ -183,15 +224,24 @@ public class GameInstance {
     }
 
     /**
-     * Start preparation phase
+     * 준비단계 시작
      */
     private void startPreparationPhase() {
+        if (currentPhase == GamePhase.GAME_END) {
+            return;
+        }
+
+        if (getAlivePlayerCount() <= 1) {
+            endGame();
+            return;
+        }
+
         currentPhase = GamePhase.PREPARATION;
 
         // 보스바 업데이트
         updateBossBar();
 
-        // Give resources and open shop
+        // 리소스 제공 및 상점 오픈
         for (GamePlayer gp : players.values()) {
             if (gp.isAlive()) {
                 Player player = gp.getPlayer();
@@ -201,9 +251,9 @@ public class GameInstance {
                 player.setInvulnerable(true);
 
                 // 플레이어를 자신의 보드판으로 텔레포트
-                Arena arena = playerArenas.get(player.getUniqueId());
-                if (arena != null) {
-                    teleportToArenaView(player, arena);
+                com.matochess.board.BoardInstance boardInstance = playerBoards.get(player.getUniqueId());
+                if (boardInstance != null) {
+                    teleportToBoardView(player, boardInstance);
                 }
 
                 // 큰 글자로 안내 메시지 표시
@@ -263,11 +313,15 @@ public class GameInstance {
 
         broadcast("&e라운드 " + currentRound + " - 준비 단계 (" + preparationTime + "초)");
 
-        // 모든 플레이어 스코어보드 업데이트 🚨 -> updateGameDisplays로 변경
+        // 모든 플레이어 스코어보드 업데이트
         updateGameDisplays();
 
         // 배치판의 모든 유닛을 미리보기로 표시
-        refreshAllPlayersPreviewUnits();
+        // 주의: 첫 라운드에는 유닛이 없으므로 호출하지 않음
+        // 이후 라운드에서는 이전 라운드의 배치가 유지되므로 프리뷰를 표시
+        if (currentRound > 1) {
+            refreshAllPlayersPreviewUnits();
+        }
 
         // 남은 시간 초기화 및 타이머 시작
         phaseTimeRemaining = preparationTime;
@@ -280,46 +334,45 @@ public class GameInstance {
     }
 
     /**
-     * 플레이어를 아레나로 텔레포트
+     * 플레이어를 보드판으로 텔레포트
      * 보드판 위에 평범하게 스폰 (걸어다닐 수 있음)
      */
-    private void teleportToArenaView(Player player, Arena arena) {
-        Location pos1 = arena.getPos1();
-        Location pos2 = arena.getPos2();
-
-        // 32x24 보드판의 중심 좌표 계산
-        double centerX = (pos1.getX() + pos2.getX()) / 2.0 + 0.5;
-        double centerZ = (pos1.getZ() + pos2.getZ()) / 2.0 + 0.5;
-        double boardY = Math.min(pos1.getY(), pos2.getY());
-
-        // 보드판 위에 스폰 (보드판 표면 + 1블록)
-        Location spawnPos = new Location(pos1.getWorld(), centerX, boardY + 1, centerZ);
+    private void teleportToBoardView(Player player, com.matochess.board.BoardInstance boardInstance) {
+        Location spawnPos = boardInstance.getPlayerSpawnLocation();
 
         player.teleport(spawnPos);
-        plugin.getLogger().info("Player " + player.getName() + " teleported to arena at " +
-                               String.format("%.1f, %.1f, %.1f", centerX, boardY + 1, centerZ));
+        plugin.getLogger().info("Player " + player.getName() + " teleported to board at " +
+                               String.format("%.1f, %.1f, %.1f", spawnPos.getX(), spawnPos.getY(), spawnPos.getZ()));
     }
 
     /**
-     * Start combat phase
+     * 전투 단계 시작
      */
     private void startCombatPhase() {
-        // 전투 시작 전 모든 미리보기 유닛 제거
-        clearAllPlayersPreviewUnits();
+        // 프리뷰 유닛 제거는 각 전투가 시작될 때 개별적으로 처리됨
+        // (전투 보드에 유닛을 스폰한 후에 프리뷰를 제거해야 함)
 
         // Determine if PVE or PVP
-        boolean isPVE = (currentRound % 4 == 0 || currentRound % 7 == 0);
+        boolean isPVE = (currentRound == 1 || currentRound % 4 == 0);
+        activeCombats = 0;
 
         if (isPVE) {
             currentPhase = GamePhase.COMBAT_PVE;
             broadcast("&cPVE 전투 단계 - 몬스터와 싸우세요!");
-            startPVECombats();
+            activeCombats = startPVECombats();
         } else {
             currentPhase = GamePhase.COMBAT_PVP;
+            clearExpiredGroundDropsForPVP();
             broadcast("&cPVP 전투 단계 - 다른 플레이어와 싸우세요!");
-            matchPlayers();
+            activeCombats = matchPlayers();
         }
         updateGameDisplays(); // updateGameDisplays는 updateScoreboard와 updatePlayerList를 모두 호출합니다.
+
+        if (activeCombats == 0) {
+            concludeCombatPhaseEarly();
+            return;
+        }
+
         // 보스바 업데이트 및 타이머 시작
         phaseTimeRemaining = combatTime;
         updateBossBar();
@@ -332,35 +385,40 @@ public class GameInstance {
     }
 
     /**
-     * Start PVE combat for all alive players
+     * 모든 살아있는 플레이어 PVE 매칭
      */
-    private void startPVECombats() {
+    private int startPVECombats() {
         // PVE에서는 매칭 정보 초기화 (상대가 몬스터)
         currentMatchups.clear();
+        int started = 0;
 
         for (GamePlayer gp : players.values()) {
             if (gp.isAlive()) {
-                plugin.getCombatManager().startPVECombat(gp, currentRound);
+                plugin.getCombatManager().startPVECombat(gp, currentRound, this::handleCombatFinished);
                 // PVE는 상대가 없음 (몬스터)
                 currentMatchups.put(gp.getPlayerId(), null);
+                started++;
             }
         }
+        return started;
     }
 
     /**
-     * Match players for PVP combat
+     * PVP 전투에서 플레이어 매칭
      */
-    private void matchPlayers() {
+    private int matchPlayers() {
         // 이전 매칭 정보 초기화
         currentMatchups.clear();
+        int started = 0;
 
         List<GamePlayer> alivePlayers = players.values().stream()
             .filter(GamePlayer::isAlive)
             .collect(Collectors.toList());
 
+        // 랜덤으로 매칭되도록 셔플링
         Collections.shuffle(alivePlayers);
 
-        // Simple pairing algorithm
+        // for 문 순환 매칭
         for (int i = 0; i < alivePlayers.size() - 1; i += 2) {
             GamePlayer p1 = alivePlayers.get(i);
             GamePlayer p2 = alivePlayers.get(i + 1);
@@ -372,8 +430,12 @@ public class GameInstance {
             p1.getPlayer().sendMessage("§c상대: §e" + p2.getPlayer().getName());
             p2.getPlayer().sendMessage("§c상대: §e" + p1.getPlayer().getName());
 
-            // Start combat
-            plugin.getCombatManager().startPVPCombat(p1, p2);
+            // 전투 시작 전 보드 상태 로그
+            plugin.getLogger().info("Starting PVP combat: " + p1.getPlayer().getName() + " (" + p1.getBoard().size() + " units) vs " + p2.getPlayer().getName() + " (" + p2.getBoard().size() + " units)");
+
+            // 전투 시작
+            plugin.getCombatManager().startPVPCombat(p1, p2, this::handleCombatFinished);
+            started++;
         }
 
         // 홀수 플레이어인 경우, 한 명은 부전승
@@ -384,13 +446,175 @@ public class GameInstance {
             // 부전승 플레이어는 상대가 없음
             currentMatchups.put(lastPlayer.getPlayerId(), null);
         }
+
+        return started;
     }
 
     /**
-     * End current round
+     * 전투 종료 콜백 처리
+     */
+    private void handleCombatFinished() {
+        if (activeCombats > 0) {
+            activeCombats--;
+        }
+
+        if (currentPhase == GamePhase.GAME_END) {
+            return;
+        }
+
+        if (getAlivePlayerCount() <= 1) {
+            activeCombats = 0;
+            endGame();
+            return;
+        }
+
+        if (activeCombats == 0 && currentPhase.isCombat()) {
+            concludeCombatPhaseEarly();
+        }
+    }
+
+    private long getAlivePlayerCount() {
+        return players.values().stream().filter(GamePlayer::isAlive).count();
+    }
+
+    // 항복한 플레이어
+    public void surrenderPlayer(UUID playerId) {
+        GamePlayer surrendering = players.get(playerId);
+        if (surrendering == null || !surrendering.isAlive()) {
+            Player player = Bukkit.getPlayer(playerId);
+            if (player != null) {
+                player.sendMessage("§c이미 게임에서 탈락한 상태입니다.");
+            }
+            return;
+        }
+
+        Player player = surrendering.getPlayer();
+        String playerName;
+        if (player != null) {
+            playerName = player.getName();
+        } else {
+            OfflinePlayer offline = Bukkit.getOfflinePlayer(playerId);
+            playerName = (offline != null && offline.getName() != null) ? offline.getName() : playerId.toString();
+        }
+
+        eliminatePlayer(
+            surrendering,
+            "§c항복하여 게임에서 탈락했습니다.",
+            "§c" + playerName + " §7님이 항복하여 게임에서 탈락했습니다.",
+            false,
+            true
+        );
+    }
+
+    /**
+     * 지정된 플레이어를 게임에서 탈락 처리합니다.
+     * @param target 대상 플레이어
+     * @param personalMessage 대상 플레이어에게 표시할 메시지 (null 가능)
+     * @param broadcastMessage 전체 방송 메시지 (null 허용, {player} 플레이스홀더 지원)
+     * @param fromCombat 전투 흐름에서 호출되었는지 여부 (true면 이미 CombatInstance가 종료 처리 중)
+     * @param recordLoss 패배 기록을 갱신할지 여부
+     */
+    public void eliminatePlayer(GamePlayer target,
+                                String personalMessage,
+                                String broadcastMessage,
+                                boolean fromCombat,
+                                boolean recordLoss) {
+        if (target == null || !target.isAlive()) {
+            return;
+        }
+
+        if (recordLoss) {
+            target.recordLoss();
+        }
+
+        UUID playerId = target.getPlayerId();
+        Player player = target.getPlayer();
+        String playerName;
+        if (player != null && player.isOnline()) {
+            playerName = player.getName();
+        } else {
+            OfflinePlayer offline = Bukkit.getOfflinePlayer(playerId);
+            playerName = (offline != null && offline.getName() != null) ? offline.getName() : playerId.toString();
+        }
+
+        target.setHealth(0);
+        target.setAlive(false);
+        target.clearAllUnits();
+        clearAllPreviewUnits(playerId);
+
+        if (!fromCombat) {
+            CombatInstance combat = plugin.getCombatManager().getCombatByPlayer(playerId);
+            if (combat != null) {
+                combat.forfeitPlayer(playerId);
+            }
+        }
+
+        plugin.getBoardInstanceManager().scheduleUnload(playerId);
+        plugin.getInventoryGUIManager().resetPlayerShop(playerId, true);
+
+        currentMatchups.remove(playerId);
+        currentMatchups.values().removeIf(opponent -> opponent != null && opponent.equals(playerId));
+
+        if (player != null && player.isOnline()) {
+            if (personalMessage != null && !personalMessage.isEmpty()) {
+                player.sendMessage(personalMessage);
+            }
+            player.setGameMode(GameMode.SPECTATOR);
+            // 탈락 시 감정 표현을 위해 일관된 사운드를 재생한다.
+            player.playSound(player.getLocation(), org.bukkit.Sound.ENTITY_WITHER_DEATH, 0.7f, 0.8f);
+        }
+
+        if (broadcastMessage != null && !broadcastMessage.isEmpty()) {
+            broadcast(broadcastMessage.replace("{player}", playerName));
+        } else {
+            broadcast("§c" + playerName + " §7님이 탈락했습니다.");
+        }
+
+        updateGameDisplays();
+
+        long aliveCount = players.values().stream().filter(GamePlayer::isAlive).count();
+        if (aliveCount <= 1 && currentPhase != GamePhase.GAME_END) {
+            activeCombats = 0;
+            endGame();
+            return;
+        }
+    }
+
+    /**
+     * 모든 전투가 끝났을 때 즉시 라운드를 마무리
+     */
+    private void concludeCombatPhaseEarly() {
+        if (!currentPhase.isCombat()) {
+            return;
+        }
+
+        if (phaseTask != null) {
+            phaseTask.cancel();
+            phaseTask = null;
+        }
+
+        if (bossBarTask != null && !bossBarTask.isCancelled()) {
+            bossBarTask.cancel();
+        }
+        bossBarTask = null;
+
+        phaseTimeRemaining = 0;
+        updateBossBar();
+
+        endRound();
+    }
+
+    /**
+     * 라운드 종료
      */
     private void endRound() {
+        phaseTask = null;
         currentPhase = GamePhase.ROUND_END;
+
+        if (bossBarTask != null && !bossBarTask.isCancelled()) {
+            bossBarTask.cancel();
+        }
+        bossBarTask = null;
 
         // Check for game end
         long aliveCount = players.values().stream().filter(GamePlayer::isAlive).count();
@@ -400,22 +624,23 @@ public class GameInstance {
             return;
         }
 
-        // Move to next round
+        // 다음 라운드 진행
         currentRound++;
         Bukkit.getScheduler().runTaskLater(plugin, this::startPreparationPhase, 60L);
     }
 
     /**
-     * End the game
+     * 게임 종료
      */
     public void endGame() {
         currentPhase = GamePhase.GAME_END;
+        clearExpiredGroundDropsForPVP();
 
         if (phaseTask != null) {
             phaseTask.cancel();
         }
 
-        // Calculate final placements
+        // 최종 순위 계산
         List<GamePlayer> rankedPlayers = players.values().stream()
             .sorted(Comparator.comparingInt(GamePlayer::getHealth).reversed())
             .collect(Collectors.toList());
@@ -427,33 +652,51 @@ public class GameInstance {
         // 실제 게임 인원 수
         int totalPlayers = rankedPlayers.size();
 
-        // Update ratings and notify players
+        // 레이팅 업데이트 및 알림
         for (GamePlayer gp : rankedPlayers) {
             int placement = gp.getPlacement();
             Player player = gp.getPlayer();
 
-            if (player != null && player.isOnline()) {
-                player.sendMessage("§6=== 게임 종료 ===");
-                player.sendMessage("§e순위: §a#" + placement + " §7/ " + totalPlayers + "명");
+            String fallbackName = null;
+            if (player != null) {
+                fallbackName = player.getName();
+            }
+            if (fallbackName == null || fallbackName.isEmpty()) {
+                fallbackName = Optional.ofNullable(Bukkit.getOfflinePlayer(gp.getPlayerId()).getName())
+                    .orElse(gp.getPlayerId().toString());
+            }
 
-                // Update profile
-                PlayerProfile profile = plugin.getDataManager().getCachedProfile(gp.getPlayerId());
-                if (profile != null) {
-                    // 인원 수에 따른 점수 가져오기
-                    String configPath = "ranking.placement-points-" + totalPlayers + "." + placement;
-                    int ratingChange = plugin.getConfig().getInt(configPath, 0);
+            PlayerProfile profile = plugin.getDataManager().getCachedProfile(gp.getPlayerId());
+            if (profile == null) {
+                try {
+                    profile = plugin.getDataManager()
+                        .loadProfile(gp.getPlayerId(), fallbackName)
+                        .join();
+                } catch (CompletionException ex) {
+                    plugin.getLogger().log(Level.SEVERE,
+                        "Failed to load profile for player " + gp.getPlayerId(), ex);
+                }
+            }
 
-                    profile.recordGame(placement);
+            if (profile != null) {
+                String configPath = "ranking.placement-points-" + totalPlayers + "." + placement;
+                int ratingChange = plugin.getConfig().getInt(configPath, 0);
 
-                    if (profile.addRating(ratingChange)) {
+                profile.recordGame(placement);
+                boolean rankChanged = profile.addRating(ratingChange);
+                plugin.getDataManager().saveProfile(profile);
+
+                if (player != null && player.isOnline()) {
+                    player.sendMessage("§6=== 게임 종료 ===");
+                    player.sendMessage("§e순위: §a#" + placement + " §7/ " + totalPlayers + "명");
+                    if (rankChanged) {
                         player.sendMessage("§a등급 변경! " + profile.getRankString());
                     }
-
                     player.sendMessage("§6점수: " + (ratingChange >= 0 ? "+" : "") + ratingChange +
-                                     " §7(" + profile.getRankString() + " - " + profile.getRatingPoints() + "/100)");
-
-                    plugin.getDataManager().saveProfile(profile);
+                        " §7(" + profile.getRankString() + " - " + profile.getRatingPoints() + "/100)");
                 }
+            } else {
+                plugin.getLogger().warning("Unable to update rating for player " + gp.getPlayerId() + " - profile unavailable");
             }
         }
 
@@ -471,17 +714,41 @@ public class GameInstance {
         for (GamePlayer gp : rankedPlayers) {
             Player player = gp.getPlayer();
             if (player != null && player.isOnline()) {
-                // 기본 스코어보드로 복원
-                player.setScoreboard(Bukkit.getScoreboardManager().getMainScoreboard());
+                // 기존 스코어보드 복구 (없으면 메인 스코어보드)
+                Scoreboard originalBoard = originalScoreboards.get(player.getUniqueId());
+                if (originalBoard != null) {
+                    player.setScoreboard(originalBoard);
+                } else {
+                    ScoreboardManager manager = Bukkit.getScoreboardManager();
+                    Scoreboard mainBoard = manager != null ? manager.getMainScoreboard() : null;
+                    if (mainBoard != null) {
+                        player.setScoreboard(mainBoard);
+                    }
+                }
+
+                // 탭 리스트 이름 복구 (없으면 플레이어 이름)
+                String originalListName = originalPlayerListNames.get(player.getUniqueId());
+                if (originalListName != null && !originalListName.isEmpty()) {
+                    player.setPlayerListName(originalListName);
+                } else {
+                    player.setPlayerListName(player.getName());
+                }
             }
         }
         playerScoreboards.clear();
+        originalScoreboards.clear();
+        originalPlayerListNames.clear();
 
-        // 아레나 반환
-        for (Arena arena : playerArenas.values()) {
-            plugin.getArenaManager().releaseArena(arena);
+        // 프리뷰 유닛 정리
+        clearAllPlayersPreviewUnits();
+        previewBoardManagers.clear();
+
+        // 보드 인스턴스 언로드 스케줄
+        for (UUID playerId : playerBoards.keySet()) {
+            plugin.getBoardInstanceManager().scheduleUnload(playerId);
         }
-        playerArenas.clear();
+        playerBoards.clear();
+        pendingBoardPreparations.clear();
 
         // 플레이어 데이터 복구 및 원래 위치로 복귀
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
@@ -573,7 +840,7 @@ public class GameInstance {
     }
 
     /**
-     * Broadcast message to all players in this game
+     * 해당 게임에 있는 모든 플레이어에게 알림
      */
     public void broadcast(String message) {
         message = message.replace('&', '§');
@@ -585,10 +852,6 @@ public class GameInstance {
     }
 
     // Getters
-    public UUID getGameId() {
-        return gameId;
-    }
-
     public Map<UUID, GamePlayer> getPlayers() {
         return new HashMap<>(players);
     }
@@ -605,12 +868,8 @@ public class GameInstance {
         return currentPhase;
     }
 
-    public int getCurrentRound() {
-        return currentRound;
-    }
-
-    public Arena getPlayerArena(UUID playerId) {
-        return playerArenas.get(playerId);
+    public com.matochess.board.BoardInstance getPlayerBoard(UUID playerId) {
+        return playerBoards.get(playerId);
     }
 
     /**
@@ -691,6 +950,26 @@ public class GameInstance {
 
         int line = 15; // 스코어보드는 아래에서 위로 (15 -> 1)
 
+        int playerGold = gamePlayer.getGold();
+        int playerLevel = gamePlayer.getLevel();
+        List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
+        int unitsOnBoard = boardUnits.size();
+        int maxUnits = gamePlayer.getMaxBoardUnits();
+        int availableSlots = Math.max(0, maxUnits - unitsOnBoard);
+        int currentXp = gamePlayer.getExperience();
+        boolean isMaxLevel = playerLevel >= xpRequired.length - 1;
+        int xpTarget = isMaxLevel ? currentXp : xpRequired[Math.min(playerLevel, xpRequired.length - 1)];
+        String xpDisplay = isMaxLevel ? "MAX" : currentXp + "/" + xpTarget;
+
+        String economyLine = String.format("§6골드 §e%d §7| §b레벨 §f%d §7| §d경험치 §f%s",
+            playerGold, playerLevel, xpDisplay);
+        String availablePlaceLine = String.format("§6배치 §e%d / §f%d | 잔여 배치 §e%d", unitsOnBoard, maxUnits, availableSlots);
+
+        objective.getScore(economyLine).setScore(line--);
+        objective.getScore(availablePlaceLine).setScore(line--);
+
+        objective.getScore("§r§0").setScore(line--); // 구분선 (고유 코드)
+
         // === 아레나 정보 (전투 중일 때만 표시) ===
         if (currentPhase.isCombat()) {
             objective.getScore("§e§l━━ 아레나 정보 ━━").setScore(line--);
@@ -735,7 +1014,7 @@ public class GameInstance {
 
             objective.getScore("§7vs").setScore(line--);
 
-// 3. 상대 정보 (동적 색상 적용)
+            // 3. 상대 정보 (동적 색상 적용)
             UUID opponentId = currentMatchups.get(player.getUniqueId());
             if (opponentId != null) {
                 GamePlayer opponent = players.get(opponentId);
@@ -746,7 +1025,7 @@ public class GameInstance {
                     } else if (opponent.getLoseStreak() > 0) {
                         opponentStreak = " §c⬇" + opponent.getLoseStreak();
                     }
-                    String opponentInfo = String.format("%s%s §f%dHP%s", // 🚨 opponentColor 적용
+                    String opponentInfo = String.format("%s%s §f%dHP%s",
                             opponentColor,
                             opponent.getPlayer().getName().length() > 10 ?
                                     opponent.getPlayer().getName().substring(0, 10) : opponent.getPlayer().getName(),
@@ -770,14 +1049,11 @@ public class GameInstance {
             objective.getScore("§r  ").setScore(line--); // 빈 줄
         }
 
-        // 🚨 1. 보드 유닛 가져오기
-        List<Unit> boardUnits = new ArrayList<>(gamePlayer.getBoard().values());
-
-        // 🚨 2. 시너지 계산 (activeSynergies 정의)
+        // 시너지 계산 (activeSynergies 정의)
         final Map<UnitTrait, SynergyManager.ActiveSynergy> activeSynergies =
                 plugin.getSynergyManager().calculateSynergies(boardUnits);
 
-        // 🚨 3. 특성 카운트 계산 (traitCounts 정의)
+        // 특성 카운트 계산 (traitCounts 정의)
         final Map<UnitTrait, Integer> traitCounts = new HashMap<>();
         for (Unit unit : boardUnits) {
             for (UnitTrait trait : unit.getTraits()) {
@@ -844,6 +1120,17 @@ public class GameInstance {
 
         objective.getScore("§r§r").setScore(line--); // 빈 줄
         objective.getScore("§7라운드: §f" + currentRound).setScore(line--);
+
+        String actionBarMessage;
+        if (isMaxLevel) {
+            actionBarMessage = String.format("§6골드 §e%d §7| §b레벨 §f%d §7(MAX) §7| §a배치 %d/%d (잔여 %d)",
+                playerGold, playerLevel, unitsOnBoard, maxUnits, availableSlots);
+        } else {
+            actionBarMessage = String.format("§6골드 §e%d §7| §b레벨 §f%d §7(%s) §7| §a배치 %d/%d (잔여 %d)",
+                playerGold, playerLevel, xpDisplay, unitsOnBoard, maxUnits, availableSlots);
+        }
+
+        player.spigot().sendMessage(ChatMessageType.ACTION_BAR, TextComponent.fromLegacyText(actionBarMessage));
     }
 
     /**
@@ -862,6 +1149,147 @@ public class GameInstance {
     }
 
     /**
+     * 드랍된 장비 아이템 추적 구조
+     */
+    private static class PendingDrop {
+        final Item item;
+        final UUID equipmentInstanceId;
+
+        PendingDrop(Item item, UUID equipmentInstanceId) {
+            this.item = item;
+            this.equipmentInstanceId = equipmentInstanceId;
+        }
+
+        boolean matches(Item other) {
+            return item != null && other != null && item.getUniqueId().equals(other.getUniqueId());
+        }
+
+        boolean isAlive() {
+            return item != null && item.isValid();
+        }
+    }
+
+    /**
+     * 특정 플레이어의 바닥 드랍 등록
+     */
+    public void registerPendingGroundDrop(UUID playerId, Item item, UUID equipmentInstanceId) {
+        if (playerId == null || item == null || equipmentInstanceId == null) {
+            return;
+        }
+        pendingGroundDrops
+            .computeIfAbsent(playerId, id -> new ArrayList<>())
+            .add(new PendingDrop(item, equipmentInstanceId));
+    }
+
+    /**
+     * 플레이어가 드랍 아이템을 회수했을 때 호출하여 추적 목록에서 제거
+     */
+    public void markGroundDropCollected(UUID playerId, Item item) {
+        if (playerId == null || item == null) {
+            return;
+        }
+        List<PendingDrop> drops = pendingGroundDrops.get(playerId);
+        if (drops == null) {
+            return;
+        }
+
+        drops.removeIf(drop -> drop == null || !drop.isAlive() || drop.matches(item));
+        if (drops.isEmpty()) {
+            pendingGroundDrops.remove(playerId);
+        }
+    }
+
+    /**
+     * 추적 중인 드랍인지 여부 확인
+     */
+    public boolean isTrackedGroundDrop(UUID playerId, Item item) {
+        if (playerId == null || item == null) {
+            return false;
+        }
+        List<PendingDrop> drops = pendingGroundDrops.get(playerId);
+        if (drops == null) {
+            return false;
+        }
+        for (PendingDrop drop : drops) {
+            if (drop != null && drop.matches(item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 다음 PVP 전투가 시작될 때까지 회수되지 않은 장비 드랍을 소멸 처리
+     */
+    public void clearExpiredGroundDropsForPVP() {
+        if (pendingGroundDrops.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<UUID, List<PendingDrop>> entry : new HashMap<>(pendingGroundDrops).entrySet()) {
+            UUID playerId = entry.getKey();
+            GamePlayer gamePlayer = players.get(playerId);
+            Player player = gamePlayer != null ? gamePlayer.getPlayer() : null;
+
+            List<PendingDrop> drops = entry.getValue();
+            if (drops == null) {
+                continue;
+            }
+
+            for (PendingDrop drop : drops) {
+                if (drop != null && drop.item != null && drop.item.isValid()) {
+                    drop.item.remove();
+                }
+                if (gamePlayer != null && drop != null) {
+                    gamePlayer.removeEquipmentByInstanceId(drop.equipmentInstanceId);
+                }
+            }
+
+            if (gamePlayer != null && player != null && player.isOnline()) {
+                player.sendMessage("§c[알림] 준비 단계 동안 회수하지 않은 장비가 소멸되었습니다.");
+                plugin.getInventoryGUIManager().refreshGameInventory(player, gamePlayer);
+                updateScoreboard(player, gamePlayer);
+            }
+            pendingGroundDrops.remove(playerId);
+        }
+
+        updatePlayerList();
+    }
+
+    /**
+     * Ensure board instance and preview manager are ready for the given player.
+     */
+    private java.util.concurrent.CompletableFuture<Void> ensureBoardReady(UUID playerId) {
+        BoardManager boardManager = previewBoardManagers.get(playerId);
+        com.matochess.board.BoardInstance boardInstance = playerBoards.get(playerId);
+
+        if (boardManager != null && boardInstance != null) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+
+        return pendingBoardPreparations.computeIfAbsent(playerId, id -> {
+            java.util.concurrent.CompletableFuture<Void> readinessFuture = plugin.getBoardInstanceManager()
+                .loadPlayerBoard(id)
+                .thenCompose(instance -> {
+                    java.util.concurrent.CompletableFuture<Void> readyFuture = new java.util.concurrent.CompletableFuture<>();
+                    Bukkit.getScheduler().runTask(plugin, () -> {
+                        playerBoards.put(id, instance);
+                        previewBoardManagers.computeIfAbsent(id, key -> new BoardManager(plugin));
+                        readyFuture.complete(null);
+                    });
+                    return readyFuture;
+                });
+
+            return readinessFuture.whenComplete((unused, error) -> {
+                pendingBoardPreparations.remove(id);
+                if (error != null) {
+                    plugin.getLogger().log(Level.SEVERE, "Failed to prepare board resources for player " + id, error);
+                }
+            });
+        });
+    }
+
+    /**
      * 준비 단계에서 유닛을 아레나에 실시간으로 배치 (프리뷰)
      */
     public void spawnPreviewUnit(UUID playerId, Unit unit, Position position) {
@@ -869,12 +1297,33 @@ public class GameInstance {
             return; // 준비 단계가 아니면 무시
         }
 
-        BoardManager boardManager = previewBoardManagers.get(playerId);
-        Arena arena = playerArenas.get(playerId);
+        ensureBoardReady(playerId)
+            .thenRun(() -> {
+                if (!currentPhase.equals(GamePhase.PREPARATION)) {
+                    return;
+                }
 
-        if (boardManager != null && arena != null) {
-            boardManager.spawnUnit(unit, position, true, arena).setAI(false);
-        }
+                BoardManager boardManager = previewBoardManagers.get(playerId);
+                com.matochess.board.BoardInstance boardInstance = playerBoards.get(playerId);
+
+                if (boardManager == null || boardInstance == null) {
+                    plugin.getLogger().warning("Board resources still unavailable for player " + playerId + " - retry later");
+                    return;
+                }
+
+                LivingEntity entity = boardManager.spawnUnit(unit, position, true, boardInstance);
+                if (entity != null) {
+                    entity.setAI(false);
+                    plugin.getLogger().info("Preview unit spawned: " + unit.getId() + " at " + position + " for player " + playerId);
+                } else {
+                    plugin.getLogger().warning("Failed to spawn preview unit: " + unit.getId() + " for player " + playerId);
+                }
+            })
+            .exceptionally(error -> {
+                plugin.getLogger().log(Level.SEVERE,
+                    "Failed to spawn preview unit for player " + playerId + ": " + error.getMessage(), error);
+                return null;
+            });
     }
 
     /**
@@ -885,10 +1334,26 @@ public class GameInstance {
             return; // 준비 단계가 아니면 무시
         }
 
-        BoardManager boardManager = previewBoardManagers.get(playerId);
-        if (boardManager != null) {
-            boardManager.removeEntity(unit);
-        }
+        ensureBoardReady(playerId)
+            .thenRun(() -> {
+                if (!currentPhase.equals(GamePhase.PREPARATION)) {
+                    return;
+                }
+
+                BoardManager boardManager = previewBoardManagers.get(playerId);
+                if (boardManager == null) {
+                    plugin.getLogger().warning("Board resources still unavailable for player " + playerId + " when removing preview unit");
+                    return;
+                }
+
+                plugin.getLogger().info("Removing preview unit: " + unit.getId() + " (instance: " + unit.getInstanceId() + ") for player " + playerId);
+                boardManager.removeEntity(unit);
+            })
+            .exceptionally(error -> {
+                plugin.getLogger().log(Level.SEVERE,
+                    "Failed to remove preview unit for player " + playerId + ": " + error.getMessage(), error);
+                return null;
+            });
     }
 
     /**
@@ -918,21 +1383,39 @@ public class GameInstance {
             return;
         }
 
-        // 기존 미리보기 모두 제거
-        clearAllPreviewUnits(playerId);
-
-        // 배치판의 모든 유닛을 미리보기로 스폰
         GamePlayer gp = players.get(playerId);
-        if (gp != null) {
-            BoardManager boardManager = previewBoardManagers.get(playerId);
-            Arena arena = playerArenas.get(playerId);
-
-            if (boardManager != null && arena != null) {
-                gp.getBoard().forEach((position, unit) -> {
-                    boardManager.spawnUnit(unit, position, true, arena).setAI(false);
-                });
-            }
+        if (gp == null) {
+            return;
         }
+
+        ensureBoardReady(playerId)
+            .thenRun(() -> {
+                if (!currentPhase.equals(GamePhase.PREPARATION)) {
+                    return;
+                }
+
+                clearAllPreviewUnits(playerId);
+
+                BoardManager boardManager = previewBoardManagers.get(playerId);
+                com.matochess.board.BoardInstance boardInstance = playerBoards.get(playerId);
+
+                if (boardManager != null && boardInstance != null) {
+                    gp.getBoard().forEach((position, unit) -> {
+                        LivingEntity entity = boardManager.spawnUnit(unit, position, true, boardInstance);
+                        if (entity != null) {
+                            entity.setAI(false);
+                            entity.setInvulnerable(true);
+                        }
+                    });
+                } else {
+                    plugin.getLogger().warning("Board resources still unavailable for player " + playerId + " during preview refresh");
+                }
+            })
+            .exceptionally(error -> {
+                plugin.getLogger().log(Level.SEVERE,
+                    "Failed to refresh preview units for player " + playerId + ": " + error.getMessage(), error);
+                return null;
+            });
     }
 
     /**

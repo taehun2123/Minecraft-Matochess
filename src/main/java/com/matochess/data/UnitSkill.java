@@ -47,7 +47,10 @@ public class UnitSkill {
         HEAL("힐", "아군을 치유함"),
         SUMMON("소환", "유닛을 소환함"),
         TELEPORT("순간이동", "위치를 이동함"),
-        BACKSTAB("후방 공격", "적의 후방으로 이동하여 공격");
+        BACKSTAB("후방 공격", "적의 후방으로 이동하여 공격"),
+        BEAM("광선 공격", "직선상의 적에게 강력한 광선 피해"),
+        CHARGE("돌진", "전방으로 돌진하며 광역 피해"),
+        DRAGON_BREATH("용의 숨결", "넓은 범위에 용의 숨결을 분출");
 
         private final String displayName;
         private final String description;

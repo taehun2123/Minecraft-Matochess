@@ -25,6 +25,16 @@ public class SynergyManager {
      * Each synergy designed with specific strength/weakness
      */
     private void initializeTraitBonuses() {
+        // VILLAGER (주민) - 마법 저항력 % 증가
+        addTraitBonus(UnitTrait.VILLAGER, 2, BonusType.MAGIC_RESIST_PERCENT, 15.0,
+                "주민 유닛 마법 저향력 15%");
+        addTraitBonus(UnitTrait.VILLAGER, 3, BonusType.MAGIC_RESIST_PERCENT, 30.0,
+                "주민 유닛 마법 저향력 30%");
+
+        // CAVE (동굴) - 치명타 데미지 강화, 낮은 체력(단발성 특화, 초반 강화)
+        addTraitBonus(UnitTrait.CAVE, 2, BonusType.CRITICAL_CHANCE, 15.0,
+                "동굴 유닛 치명타 확률 15%");
+
         // UNDEAD (언데드) - 지속력 특화, 낮은 순간 화력
         // 장점: 체력 회복으로 오래 버팀
         // 단점: 공격력이 낮아 킬 속도 느림
@@ -133,15 +143,30 @@ public class SynergyManager {
 
     /**
      * Calculate active synergies for a list of units
+     * 중요: 같은 유닛 ID를 가진 유닛은 한 번만 카운트됩니다.
+     * 예: zombie 3개 = 시너지 카운트 1, zombie + skeleton = 시너지 카운트 2
      */
     public Map<UnitTrait, ActiveSynergy> calculateSynergies(List<Unit> units) {
-        // Count units per trait
-        Map<UnitTrait, Integer> traitCounts = new HashMap<>();
+        // 고유한 유닛 ID만 추출 (같은 유닛 중복 제거)
+        Set<String> uniqueUnitIds = units.stream()
+                .map(Unit::getId)
+                .collect(Collectors.toSet());
+
+        // 고유한 유닛들의 traits만 카운트
+        Map<UnitTrait, Set<String>> traitToUniqueUnits = new HashMap<>();
 
         for (Unit unit : units) {
+            String unitId = unit.getId();
+            // 이미 카운트된 유닛 ID인지 확인
             for (UnitTrait trait : unit.getTraits()) {
-                traitCounts.put(trait, traitCounts.getOrDefault(trait, 0) + 1);
+                traitToUniqueUnits.computeIfAbsent(trait, k -> new HashSet<>()).add(unitId);
             }
+        }
+
+        // 각 trait별 고유 유닛 수 계산
+        Map<UnitTrait, Integer> traitCounts = new HashMap<>();
+        for (Map.Entry<UnitTrait, Set<String>> entry : traitToUniqueUnits.entrySet()) {
+            traitCounts.put(entry.getKey(), entry.getValue().size());
         }
 
         // Find active bonuses

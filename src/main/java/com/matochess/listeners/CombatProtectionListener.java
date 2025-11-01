@@ -1,7 +1,12 @@
 package com.matochess.listeners;
 
 import com.matochess.MatoChessPlugin;
+import org.bukkit.Bukkit;
+import org.bukkit.entity.Creeper;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Hoglin;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.PiglinAbstract;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.event.EventHandler;
@@ -11,6 +16,8 @@ import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.EntityTargetEvent;
+import org.bukkit.event.entity.EntityTransformEvent;
+import org.bukkit.event.entity.ExplosionPrimeEvent;
 import org.bukkit.event.entity.ProjectileLaunchEvent;
 import org.bukkit.projectiles.ProjectileSource;
 
@@ -155,5 +162,59 @@ public class CombatProtectionListener implements Listener {
             event.getDrops().clear();
             event.setDroppedExp(0);
         }
+    }
+
+    /**
+     * 마토체스 유닛 크리퍼의 자폭을 차단하여 전투 로직만 사용하도록 함
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onExplosionPrime(ExplosionPrimeEvent event) {
+        if (!(event.getEntity() instanceof Creeper)) {
+            return;
+        }
+
+        Creeper creeper = (Creeper) event.getEntity();
+        if (creeper.getScoreboardTags().contains("matochess_unit_protected")) {
+            event.setCancelled(true);
+            creeper.setFuseTicks(creeper.getMaxFuseTicks());
+        }
+    }
+
+    /**
+     * 피글린/호글린이 환경 때문에 다른 형태로 변환되는 것을 차단
+     * (오버월드에서 좀비화/조글린 변환 시도 등)
+     */
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onEntityTransform(EntityTransformEvent event) {
+        if (!(event.getEntity() instanceof LivingEntity)) {
+            return;
+        }
+
+        LivingEntity entity = (LivingEntity) event.getEntity();
+        if (!entity.getScoreboardTags().contains("matochess_unit_protected")) {
+            return;
+        }
+
+        EntityType type = entity.getType();
+        boolean isPiglinFamily = type == EntityType.PIGLIN ||
+                                  type == EntityType.PIGLIN_BRUTE ||
+                                  type == EntityType.ZOMBIFIED_PIGLIN;
+        boolean isHoglinFamily = type == EntityType.HOGLIN || type == EntityType.ZOGLIN;
+
+        if (!isPiglinFamily && !isHoglinFamily) {
+            return;
+        }
+
+        event.setCancelled(true);
+
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (entity instanceof PiglinAbstract piglin) {
+                piglin.setImmuneToZombification(true);
+                piglin.setConversionTime(-1);
+            } else if (entity instanceof Hoglin hoglin) {
+                hoglin.setImmuneToZombification(true);
+                hoglin.setIsAbleToBeHunted(false);
+            }
+        });
     }
 }

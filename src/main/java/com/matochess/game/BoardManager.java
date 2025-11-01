@@ -1,24 +1,29 @@
 package com.matochess.game;
 
 import com.matochess.MatoChessPlugin;
-import com.matochess.data.Arena;
-import com.matochess.data.GamePlayer;
+import com.matochess.board.BoardInstance;
 import com.matochess.data.Position;
 import com.matochess.data.Unit;
 import org.bukkit.Bukkit;
+import org.bukkit.ChatColor;
+import org.bukkit.Chunk;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Stray;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.inventory.EntityEquipment;
+import org.bukkit.inventory.ItemStack;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * Manages unit placement on the battle board
+ * 전투판에 있는 유닛 배치 관리
  */
 public class BoardManager {
 
@@ -33,53 +38,75 @@ public class BoardManager {
     }
 
     /**
-     * Spawn a single unit at a specific position
+     * 특정 자리에 유닛을 스폰합니다.
      */
-    public LivingEntity spawnUnit(Unit unit, Position position, boolean isBlueTeam, Arena arena) {
-        String worldName = arena.getPos1().getWorld().getName(); // 🚨 Arena에서 월드 정보 가져오기
-        World world = Bukkit.getWorld(worldName);
+    public LivingEntity spawnUnit(Unit unit, Position position, boolean isBlueTeam, BoardInstance boardInstance) {
+        Location baseLocation = boardInstance.getBaseLocation();
+        World world = baseLocation.getWorld();
 
         if (world == null) {
-            plugin.getLogger().warning("Combat world not found: " + worldName);
+            plugin.getLogger().warning("Combat world not found");
             return null;
         }
 
-// Get spawn area: 이제 config 대신 Arena 좌표를 기준으로 상대적 위치를 계산해야 합니다.
-        // pos1, pos2는 아레나의 경계 블록이므로, 그중 한쪽을 기준으로 삼아야 합니다.
-        // 여기서는 Blue Team (player1)의 아레나를 사용하며,
-        // Blue Team은 pos1 기준으로, Red Team(몬스터/player2)은 pos2 기준으로 배치된다고 가정합니다.
-
-        // 아레나 경계 계산
-        double minX = Math.min(arena.getPos1().getX(), arena.getPos2().getX());
-        double minZ = Math.min(arena.getPos1().getZ(), arena.getPos2().getZ());
-        double maxZ = Math.max(arena.getPos1().getZ(), arena.getPos2().getZ());
-        double spawnY = Math.min(arena.getPos1().getY(), arena.getPos2().getY());
+        // 보드판 베이스 위치 기준으로 계산
+        double minX = baseLocation.getX();
+        double minZ = baseLocation.getZ();
+        double spawnY = baseLocation.getY();
 
         // 보드판 레이아웃 (각 칸 = 4x4 블록):
         // - X축: 8칸 × 4블록 = 32블록
         // - Z축: Blue Team 3칸 × 4블록 = 12블록, Red Team 3칸 × 4블록 = 12블록
-        // Blue Team은 Z축 앞쪽 (minZ), Red Team은 Z축 뒤쪽
 
         // Blue Team은 앞쪽 12블록 영역 (minZ ~ minZ+12)
-        // Red Team은 뒤쪽 12블록 영역 (maxZ-12 ~ maxZ)
-        double zOffset = isBlueTeam ? minZ : (maxZ - 12);
+        // Red Team은 뒤쪽 12블록 영역 (minZ+12 ~ minZ+24)
+        double zOffset = isBlueTeam ? minZ : (minZ + 12);
 
         // GUI의 각 칸(1칸)을 4x4 블록으로 매핑
         // position.getX()는 GUI X좌표 (0~7) → 실제 월드 X축
-        // position.getY()는 GUI Y좌표 (0~2) → 실제 월드 Z축 (반전: 0→뒤, 2→앞)
+        // position.getY()는 GUI Y좌표 (0~2)
+        // Blue 팀은 자연스럽게 보드의 앞/뒤가 뒤집히도록 처리하며,
+        // Red 팀은 배치판에서 본 행 순서를 그대로 유지한다.
         // 유닛은 4x4 영역의 중앙(+2.0블록)에 스폰
         double spawnX = minX + (position.getX() * 4) + 2.0;
-        // Row 반전: GUI Row 0 → 뒤쪽(8블록), GUI Row 2 → 앞쪽(0블록)
-        double spawnZ = zOffset + ((2 - position.getY()) * 4) + 2.0;
+
+        int rowIndex = Math.max(0, Math.min(2, position.getY()));
+        int combatRow = isBlueTeam ? (2 - rowIndex) : rowIndex;
+        double spawnZ = zOffset + (combatRow * 4) + 2.0;
 
         Location spawnLoc = new Location(world, spawnX, spawnY + 1, spawnZ);
 
-        // Spawn entity
+        // 청크가 로드되어 있지 않다면, 동기적으로 로드합니다.
+        Chunk spawnChunk = spawnLoc.getChunk();
+        if (!spawnChunk.isLoaded()) {
+            // force=true는 청크가 로드될 때까지 현재 스레드를 블로킹합니다.
+            spawnChunk.load(true);
+            plugin.getLogger().info("Forcibly loaded chunk for unit spawn at " + spawnChunk.getX() + ", " + spawnChunk.getZ());
+        }
+
+        plugin.getLogger().info("Spawning " + unit.getId() + " at " + String.format("%.1f, %.1f, %.1f", spawnLoc.getX(), spawnLoc.getY(), spawnLoc.getZ()) + " in world " + world.getName());
+
+        // 스폰
         LivingEntity entity = (LivingEntity) world.spawnEntity(spawnLoc, unit.getEntityType());
 
-        // Set health
-        entity.setMaxHealth(unit.getHealth());
-        entity.setHealth(unit.getHealth());
+        // 체력 설정
+        double targetHealth = unit.getHealth();
+        double appliedHealth = targetHealth;
+
+        // 바닐라 체력 1024 넘어가면 오류 발생으로 인해 Cap 적용
+        // 유닛 체력에 깎인 것에 비례하여 일정한 비율로 1024가 깎임
+        final double healthCap = 1024.0;
+        if (targetHealth > healthCap) {
+            appliedHealth = healthCap;
+            plugin.getLogger().fine("Clamped health for unit " + unit.getId() + " to " + healthCap);
+        }
+
+        AttributeInstance maxHealthAttr = entity.getAttribute(Attribute.GENERIC_MAX_HEALTH);
+        if (maxHealthAttr != null) {
+            maxHealthAttr.setBaseValue(appliedHealth);
+        }
+        entity.setHealth(appliedHealth);
+        unit.setCurrentHealth(targetHealth);
 
         // Update health bar (팀별 색상으로 구분, 발광 효과 없음)
         updateHealthBar(entity, unit, isBlueTeam);
@@ -120,97 +147,93 @@ public class BoardManager {
             mob.setCollidable(true); // 충돌 가능
         }
 
+        if (entity instanceof org.bukkit.entity.PiglinAbstract) {
+            org.bukkit.entity.PiglinAbstract piglin = (org.bukkit.entity.PiglinAbstract) entity;
+            piglin.setImmuneToZombification(true);
+            piglin.setConversionTime(-1);
+        }
+
+        if (entity instanceof org.bukkit.entity.Hoglin) {
+            org.bukkit.entity.Hoglin hoglin = (org.bukkit.entity.Hoglin) entity;
+            hoglin.setImmuneToZombification(true);
+            hoglin.setIsAbleToBeHunted(false);
+        }
+
+        // 크리퍼 유닛은 자폭하지 않도록 퓨즈/폭발 반경을 제한
+        if (entity instanceof org.bukkit.entity.Creeper) {
+            org.bukkit.entity.Creeper creeper = (org.bukkit.entity.Creeper) entity;
+            creeper.setPowered(false);
+            creeper.setExplosionRadius(0);
+            creeper.setMaxFuseTicks(2000);
+            creeper.setFuseTicks(creeper.getMaxFuseTicks());
+        }
+
+        // 엔티티 상태 확인
+        plugin.getLogger().info("Entity spawned successfully - Health: " + entity.getHealth() + "/" + entity.getMaxHealth() + ", Dead: " + entity.isDead() + ", Valid: " + entity.isValid());
+
+        // 스트레이 전용: 활을 들고 있으나 기본 활 사격은 차단하고 이펙트 기반 평타만 사용
+        if (entity instanceof Stray stray) {
+            disableStrayDefaultAttack(stray);
+        }
+
+        if (world != null && !world.isChunkLoaded(spawnLoc.getChunk().getX(), spawnLoc.getChunk().getZ())) {
+            world.loadChunk(spawnLoc.getChunk().getX(), spawnLoc.getChunk().getZ());
+            plugin.getLogger().info("Loaded chunk for unit spawn at " + spawnLoc.getChunk().getX() + ", " + spawnLoc.getChunk().getZ());
+        }
+
         // Store reference
         spawnedEntities.put(unit.getInstanceId(), entity);
+
+        entity.addScoreboardTag("matochess_unit_protected");
 
         return entity;
     }
 
     /**
-     * 엔티티의 체력바 업데이트 (오버로드 - 호환성 유지)
+     * 스트레이가 기본 활 공격을 하지 못하도록 장비와 드롭 확률을 초기화합니다.
      */
-    public void updateHealthBar(LivingEntity entity, Unit unit) {
-        updateHealthBar(entity, unit, false);
+    private void disableStrayDefaultAttack(Stray stray) {
+        EntityEquipment equipment = stray.getEquipment();
+        if (equipment != null) {
+            ItemStack visualBow = new ItemStack(org.bukkit.Material.BOW);
+            equipment.setItemInMainHand(visualBow);
+            equipment.setItemInOffHand(new ItemStack(org.bukkit.Material.AIR));
+            equipment.setItemInMainHandDropChance(0.0f);
+            equipment.setItemInOffHandDropChance(0.0f);
+        }
+        stray.setCanPickupItems(false);
+        stray.setPersistent(true);
     }
 
     /**
      * 엔티티의 체력바 업데이트 (팀별 색상 구분 - 체력에 관계없이 색상 고정)
      */
     public void updateHealthBar(LivingEntity entity, Unit unit, boolean isBlueTeam) {
-        double currentHealth = entity.getHealth();
-        double maxHealth = entity.getMaxHealth();
-        double healthPercentage = (currentHealth / maxHealth) * 100;
+        double currentHealth = Math.max(0.0, unit.getCurrentHealth());
+        double maxHealth = Math.max(1.0, unit.getHealth());
+        double currentMana = Math.max(0.0, unit.getMana());
+        double maxMana = Math.max(1.0, Unit.getMaxMana());
 
-        // 체력바 생성 (█ 기호 사용)
         int totalBars = 10;
-        int filledBars = (int) Math.ceil((healthPercentage / 100) * totalBars);
+        String healthBar = buildBar(currentHealth, maxHealth, totalBars, isBlueTeam ? ChatColor.AQUA : ChatColor.RED);
+        String manaBar = buildBar(currentMana, maxMana, totalBars, ChatColor.BLUE);
 
-        StringBuilder healthBar = new StringBuilder();
-
-        // 팀별로 색상 고정 (체력에 따라 변하지 않음)
-        String barColor = isBlueTeam ? "§b" : "§c"; // 파란색 vs 빨간색
-
-        for (int i = 0; i < totalBars; i++) {
-            if (i < filledBars) {
-                healthBar.append(barColor).append("█");
-            } else {
-                healthBar.append("§7█");
-            }
-        }
-
-        healthBar.append("§r");
-
-        // 유닛 이름 + 체력 표시 (팀별 색상)
         String nameColor = isBlueTeam ? "§b" : "§c";
-        String displayName = nameColor + unit.getDisplayName() + " " + healthBar.toString() +
-            " §7[§f" + (int)currentHealth + "§7/§f" + (int)maxHealth + "§7]";
+        // 커스텀 네임태그를 3줄로 분리하여 유닛 정보, HP, MP를 각각 표시
+        StringBuilder display = new StringBuilder();
+        display.append(nameColor).append(unit.getDisplayName())
+            .append("§8| ").append(healthBar).append("§c HP §f")
+            .append((int) currentHealth).append("/").append((int) maxHealth)
+            .append("§8| ").append(manaBar).append("§9 MP §f")
+            .append((int) Math.round(currentMana)).append("/")
+            .append((int) maxMana).append("§r");
 
-        entity.setCustomName(displayName);
+        entity.setCustomName(display.toString());
         entity.setCustomNameVisible(true);
     }
 
     /**
-     * Spawn all units for a player on the board
-     */
-    public void spawnUnits(GamePlayer gamePlayer, boolean isBlueTeam) {
-        String worldName = plugin.getConfig().getString("arena.combat-world", "world");
-        World world = Bukkit.getWorld(worldName);
-
-        if (world == null) {
-            plugin.getLogger().warning("Combat world not found: " + worldName);
-            return;
-        }
-
-        // Get spawn area
-        String path = isBlueTeam ? "arena.blue-team-area" : "arena.red-team-area";
-        double x1 = plugin.getConfig().getDouble(path + ".pos1.x", 0);
-        double y = plugin.getConfig().getDouble(path + ".pos1.y", 64);
-        double z1 = plugin.getConfig().getDouble(path + ".pos1.z", 0);
-
-        // Spawn units from board
-        gamePlayer.getBoard().forEach((position, unit) -> {
-            // Calculate spawn location (relative to grid)
-            double spawnX = x1 + position.getX();
-            double spawnZ = z1 + position.getY();
-
-            Location spawnLoc = new Location(world, spawnX + 0.5, y, spawnZ + 0.5);
-
-            // Spawn entity
-            LivingEntity entity = (LivingEntity) world.spawnEntity(spawnLoc, unit.getEntityType());
-            entity.setCustomName(unit.getDisplayName());
-            entity.setCustomNameVisible(true);
-
-            // Set health
-            entity.setMaxHealth(unit.getHealth());
-            entity.setHealth(unit.getHealth());
-
-            // Store reference
-            spawnedEntities.put(unit.getInstanceId(), entity);
-        });
-    }
-
-    /**
-     * Clear all spawned units
+     * 모든 스폰된 유닛 정리
      */
     public void clearAllUnits() {
         spawnedEntities.values().forEach(entity -> {
@@ -229,12 +252,36 @@ public class BoardManager {
     }
 
     /**
-     * Remove entity
+     * 엔티티 제거
      */
     public void removeEntity(Unit unit) {
         LivingEntity entity = spawnedEntities.remove(unit.getInstanceId());
         if (entity != null && !entity.isDead()) {
             entity.remove();
         }
+    }
+
+    /**
+     * HealthBar 생성을 위한 빌더
+     * @param current 현재의 체력상태
+     * @param max 최대 체력
+     * @param totalBars 전체 체력바 개수
+     * @param filledColor 팀 컬러
+     * @return
+     */
+    private String buildBar(double current, double max, int totalBars, ChatColor filledColor) {
+        int filled = (int) Math.round((Math.max(0.0, current) / Math.max(1.0, max)) * totalBars);
+        filled = Math.max(0, Math.min(totalBars, filled));
+
+        StringBuilder bar = new StringBuilder();
+        for (int i = 0; i < totalBars; i++) {
+            if (i < filled) {
+                bar.append(filledColor).append("█");
+            } else {
+                bar.append("§7█");
+            }
+        }
+        bar.append("§r");
+        return bar.toString();
     }
 }

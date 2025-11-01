@@ -20,6 +20,7 @@ public class Unit {
 
     // Base stats (before multipliers)
     private double baseHealth;
+    private double currentHealth; // 유닛의 현재 체력 (전투 중 감소)
     private double baseAttackDamage;
     private double baseAttackSpeed;
     private double baseArmor;
@@ -74,6 +75,7 @@ public class Unit {
         // Default attack type (will be set by unit definitions)
         this.attackType = AttackType.PHYSICAL;
         this.skill = null;
+        this.currentHealth = getHealth(); // 최대 체력으로 현재 체력 초기화
     }
 
     /**
@@ -83,6 +85,7 @@ public class Unit {
         Unit copy = new Unit(id, name, tier, entityType, iconMaterial);
         copy.setBaseStats(baseHealth, baseAttackDamage, baseAttackSpeed,
                          baseArmor, baseMagicResist, baseRange);
+        copy.currentHealth = copy.getHealth(); // 최대 체력으로 현재 체력 초기화
         return copy;
     }
 
@@ -388,6 +391,20 @@ public class Unit {
     public static double getMaxMana() {
         return MAX_MANA;
     }
+    /**
+     * Get the current remaining health of the unit
+     */
+    public double getCurrentHealth() {
+        return this.currentHealth;
+    }
+
+    /**
+     * Set the current remaining health of the unit
+     * 체력이 최대 체력을 초과하지 않도록 보정
+     */
+    public void setCurrentHealth(double health) {
+        this.currentHealth = Math.min(health, getHealth());
+    }
 
     /**
      * Create a deep copy of this unit
@@ -412,8 +429,9 @@ public class Unit {
             this.baseRange
         );
 
-        // Copy level
+        // Copy level and current health (respecting max)
         copy.level = this.level;
+        copy.currentHealth = Math.min(this.currentHealth, copy.getHealth());
 
         // Copy combat stats
         copy.criticalChance = this.criticalChance;
@@ -424,7 +442,7 @@ public class Unit {
         copy.attackType = this.attackType;
         copy.skill = this.skill;
         copy.manaPerAttack = this.manaPerAttack;
-        copy.mana = 0.0; // Reset mana for new copy
+        copy.mana = Math.min(this.mana, MAX_MANA);
 
         // Copy traits
         for (UnitTrait trait : this.traits) {
