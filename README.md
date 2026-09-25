@@ -207,7 +207,7 @@ target/MatoChess-1.0-SNAPSHOT.jar
 
 ## 📝 라이선스
 
-이 프로젝트는 개인 프로젝트입니다.
+이 프로젝트는 [MIT License](LICENSE)를 따릅니다.
 
 ## 🙏 크레딧
 
